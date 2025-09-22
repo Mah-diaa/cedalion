@@ -15,14 +15,16 @@ This document details different processing pipelines for creating cedalion head 
 ## Workflow 1: Nils full Workflow in MATLAB
  Nils has a repository [(harmening/MRIsegmentation)](https://github.com/harmening/MRIsegmentation) which contains a fully automatic MATLAB workflow for MRI segmentation (using SPM and CAT12), postprocessing, mesh generation and brain parcellation labeling. The README contains all information about [how to install](https://github.com/harmening/MRIsegmentation/tree/master?tab=readme-ov-file#how-to-get-up-and-running) and [start the segmentation](https://github.com/harmening/MRIsegmentation/tree/master?tab=readme-ov-file#how-to-start-segmentation) (running `start_segmentation_cedalion(<<path-to-MRI.nii>>)` is sufficient).<br>
   **Output**:
-  Post-processed 6-type tissue segmentation masks (`mask_air.nii`, `mask_skin.nii`, `mask_bone.nii`, `mask_csf.nii`, `mask_gray.nii`, `mask_white.nii`), that can be directly loaded into cedalion.<br>
+  Post-processed 6-type tissue segmentation masks (`mask_air.nii`, `mask_skin.nii`, `mask_bone.nii`, `mask_csf.nii`, `mask_gray.nii`, `mask_white.nii`), scalp and brain surfaces (`mask_scalp.obj`, `mask_scalp.obj`) and Schaefer2018 parcellation labels (`parcels.json`), that can be directly loaded into cedalion.<br>
+<br>
 <br>
 
 ## Workflow 2: CAT12 in Brainstorm + Freesurfer
 ### Step 1: T1 Image Segmentation
-MRI segmentation is the process of partitioning an MRI scan into the different biological tissue types. The neuroscience community so far developed various powerful tools to segment a T1-weighted MRI image that all exhibit different strengths and weaknesses. We present three of them here shortly, where each of them is suffient. However, we usually do the segmentation with using both *[Nils workflow](#workflow-1:-nils-full-workflow-in-matlab)* and *[CAT12 in Brainstorm](#B:-cat12-in-brainstorm)* and choose the best one. For a detailed brain surface model we sometimes additionally add the *[FreeSurfer workflow](#C:-detailed-analysis-with-freesurfer)*.
+MRI segmentation is the process of partitioning an MRI scan into the different biological tissue types. The neuroscience community so far developed various powerful tools to segment a T1-weighted MRI image that all exhibit different strengths and weaknesses. 
+We present two of them here shortly additional to Nils workflow, where each of them is suffient. However, we usually do the segmentation with using *[Nils workflow](#workflow-1:-nils-full-workflow-in-matlab)* and *[CAT12 in Brainstorm](#B:-cat12-in-brainstorm)* and choose the best one. For a detailed brain surface model we sometimes additionally add the *[FreeSurfer workflow](#C:-detailed-analysis-with-freesurfer)*.
 
-### B: CAT12 in Brainstorm
+### A: CAT12 in Brainstorm
 
 1. **Brainstorm Overview**:
   [Brainstorm](https://neuroimage.usc.edu/brainstorm/Introduction) is an open-source application designed for the analysis of brain recordings. It can be used as a standalone version or installed via MATLAB, and is integral to many neuroimaging workflows. It makes it easy to perform SPM, CAT12 and Freesurfer analysis.
@@ -37,7 +39,7 @@ MRI segmentation is the process of partitioning an MRI scan into the different b
   CAT12’s outputted 6-type tissue segmentations (skull, scalp, CSF, gray matter, white matter, and air) and the generated head surface.
 
   
-### C: Detailed Analysis with FreeSurfer
+### B: Detailed Analysis with FreeSurfer
 
 1. **FreeSurfer Overview**:  
   [FreeSurfer](https://surfer.nmr.mgh.harvard.edu/) is a widely-used software package in neuroimaging, specifically for MRI structural analysis. Known for its precise and reproducible methods, FreeSurfer is used to segment brain structures, reconstruct cortical surfaces, and quantify cortical thickness, surface area, and volume.<br>
