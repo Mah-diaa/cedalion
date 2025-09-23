@@ -55,7 +55,7 @@ dependencies:
   - PyQt
   - ipympl
 
-  - tree
+  - seedir
 
   - pip:
       - mne==1.9
