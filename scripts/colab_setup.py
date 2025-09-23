@@ -35,11 +35,12 @@ if not CEDALION_INSTALLED:
     print("Installing dependencies...")
     subprocess.run(["uv", "pip", "install", cedalion_repo], check=True)
     subprocess.run(["uv", "pip", "uninstall", "opt-einsum"], check=True)
+    subprocess.run(["apt", "install", "tree"], check=True)
 
     display(
         HTML(
             '<h1 style="background-color:#FF0000; color: #FFFFFF">'
-            "All dependencies were installed. Killing this runtime now."
+            "All dependencies were installed. Stopping this runtime now."
             "Please rerun the notebook.</h1>"
         )
     )
