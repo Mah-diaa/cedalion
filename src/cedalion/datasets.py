@@ -50,7 +50,7 @@ DATASETS = pooch.create(
         "colin27_parcellation.zip": "sha256:70cb51cc587b7a7389050b854beede76327ed8b105fa12971584a7d1bb7fa080",  # noqa:E501
         "icbm152_parcellation.zip": "sha256:b69ffdb3ff2fe3d85a6d5c139e59147d05ca97127589c1e4c2a8d031850f0148",  # noqa:E501
 
-        "snirf2bids_example_dataset.zip" : "3994080312157047dbdeaa76310a24e7928fdc43ad25fd9919d6dc92fd1f23be", # noqa:E501
+        "snirf2bids_example_dataset.zip" : "f14508e332c7d259c13b9717ac3c490ab2cabfd7b30fdf97b347d5ba59b783d1", # noqa:E501
     },
 )
 
@@ -283,10 +283,18 @@ def get_nn22_resting_state() -> cdc.Recording:
     return rec
 
 
-def get_snirf2bids_example_dir() -> Path:
+def get_snirf2bids_example_dataset() -> tuple[Path, Path]:
+    """A dataset for demonstrating the snirf2bids notebook.
+
+    Returns:
+        The path to the downloaded dataset directory and the path to the mapping file
+        with changes that the user would do manually.
+    """
     fnames = DATASETS.fetch("snirf2bids_example_dataset.zip", processor=pooch.Unzip())
 
-    readme_path = Path([i for i in fnames if i.endswith("readme.txt")][0])
-    dataset_dir = readme_path.parent
+    mapping_file = Path(
+        [i for i in fnames if i.endswith("snirf2BIDS_mapping_edited.csv")][0]
+    )
+    dataset_dir = mapping_file.parent
 
-    return dataset_dir
+    return dataset_dir, mapping_file
