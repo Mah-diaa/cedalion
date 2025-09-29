@@ -1,5 +1,7 @@
 """Algorithms for handling physiogical components in fNIRS data."""
 
+from __future__ import annotations
+
 import numpy as np
 import cedalion.dataclasses as cdc
 import cedalion.typing as cdt
