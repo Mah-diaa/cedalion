@@ -156,7 +156,7 @@ def plot_surface(
     surface: cdc.Surface,
     color: pv.ColorLike | None = None,
     opacity : float =1.0,
-    pick_landmarks : bool = False,
+    pick_landmarks : list[str] | bool = False,
     **kwargs,
 ):
     #used for picking landmarks in photogrammetry example
@@ -168,8 +168,9 @@ def plot_surface(
         color: Color of the mesh.
         opacity: Opacity of the mesh, ranging from 0 (transparent) to 1
             (opaque). Default is 1.0.
-        pick_landmarks: If True, enables interactive picking of landmarks on the
-            surface. Default is False.
+        pick_landmarks: If True, enables interactive picking of landmarks
+            ('Nz', 'Iz', 'Cz', 'Lpa', 'Rpa') on the surface. If a list of strings is
+            provided, these are used as the landmark labels instead. Default is False.
         **kwargs: Additional keyword arguments are passed to pv.add_mesh.
 
     Returns:
@@ -181,7 +182,6 @@ def plot_surface(
         - Eike Middell | middell@tu-berlin.de | 2024
         - Masha Iudina | mashayudi@gmail.com | 2024
     """
-
     if isinstance(surface, cdc.VTKSurface):
         mesh = surface.mesh
     elif isinstance(surface, cdc.TrimeshSurface):
@@ -208,7 +208,11 @@ def plot_surface(
 
 
     # Define landmark labels
-    landmark_labels = ['Nz', 'Iz', 'Cz', 'Lpa', 'Rpa']
+    if isinstance(pick_landmarks, bool):
+        landmark_labels = ['Nz', 'Iz', 'Cz', 'Lpa', 'Rpa']
+    else:
+        landmark_labels = pick_landmarks
+        pick_landmarks = True
     picked_points = []
     labels = []
     point_actors = []
@@ -247,10 +251,10 @@ def plot_surface(
 
         # If no point is close enough, create a new point and assign a label
         # Check if there are already 5 points placed
-        if len(picked_points) >= 5:
+        if len(picked_points) >= len(landmark_labels):
             return
 
-        landmark_label = landmark_labels[0]
+        landmark_label = landmark_labels[(len(picked_points) % len(landmark_labels))]
         # Add new point and label actors
         point_actor = plotter.add_mesh(pv.Sphere(radius=3, center=new_point),
                                        color='green', smooth_shading=True)
@@ -262,25 +266,35 @@ def plot_surface(
         picked_points.append(new_point)
         labels.append(landmark_label)
 
-    # Initialize the labels list
-    # labels = [None] * 5  # Initialize with None for unassigned labels
 
     if pick_landmarks is True:
         def get_points_and_labels():
-
-            if len(labels) < 5:
+            if len(labels) < len(landmark_labels):
                 print("Warning: Some labels are missing")
-            elif len(set(labels)) != 5:
+            elif len(set(labels)) != len(landmark_labels):
                 print("Warning: Some labels are repeated!")
-            return picked_points, labels
+           
+            landmarks = xr.DataArray(
+                    np.vstack(picked_points),
+                    dims=["label", "digitized"],
+                    coords={
+                        "label": ("label", labels),
+                        "type": ("label", [cdc.PointType.LANDMARK]*len(labels)),
+                        "group": ("label", ["L"]*len(labels)),
+                        },
+                ).pint.quantify("mm")
+            return landmarks
+
 
         plotter.enable_surface_point_picking(
             callback=place_landmark,
-            show_message="Right click to place or change the landmark label",
+            show_message="Right click to place or change the landmark label.\n"\
+                         "Expected labels: "+str(landmark_labels)+"\n"\
+                         "Close window when done.",
             show_point=False,
             tolerance=0.005,
         )
-
+        
         return get_points_and_labels
 
 def plot_labeled_points(
