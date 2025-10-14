@@ -21,6 +21,14 @@ import cedalion.math.ar_irls
 
 
 def _channel_fit(y, x, noise_model="ols", ar_order=30):
+    available_models = ["ols", "rls", "wls", "ar_irls", "gls", "glsar"]
+
+    if noise_model not in available_models:
+        raise ValueError(
+            f"unsupported noise_model '{noise_model}'. Please select one"
+            f"of these: {', '.join(available_models)}"
+        )
+
     if noise_model == "ols":
         reg_result = statsmodels.api.OLS(y, x).fit()
     elif noise_model == "rls":
@@ -189,3 +197,53 @@ def predict(
     prediction = xr.concat(prediction, dim=dim3_name)
 
     return prediction
+
+
+def predict_with_uncertainty(
+    ts: cdt.NDTimeSeries,
+    fit_results: xr.DataArray,
+    design_matrix: DesignMatrix,
+    regressors: list[str],
+    nsample: int = 10,
+):
+    """Predict time series from design matrix, fitted parameters and uncertainties.
+
+    Using the covariance matrix of the fitted parameters and a multivariate
+    normal distribution,  `nsample` set of parameters are sampled around the best
+    fit value. From this ensemble of predictions the mean and std are returned.
+
+    Args:
+        ts: The time series to be modeled.
+        fit_results: xr.DataArray of statsmodels fit results (from glm.fit)
+        design_matrix: design matrix, probably from
+            glm.design_matrix.hrf_extract_regressors
+        regressors: list of regressors to compute
+        nsample : the size of the sampled parameter set
+
+    Returns:
+        prediction (xr.DataArray): The predicted time series.
+    """
+
+    cov = fit_results.sm.cov_params().sel(
+        regressor_r=regressors.values,
+        regressor_c=regressors.values,
+    )
+
+    betas = fit_results.sm.params.sel(regressor=regressors)
+
+    sampled_betas = (
+        xr.zeros_like(betas).expand_dims({"sample": nsample}, axis=-1).copy()
+    )
+    for i_ch in range(sampled_betas.shape[0]):
+        for i_cr in range(sampled_betas.shape[1]):
+            sampled_betas[i_ch, i_cr, :, :] = np.random.multivariate_normal(
+                betas[i_ch, i_cr, :],
+                cov[i_ch, i_cr, :, :],
+                size=nsample,
+            ).T
+
+    pred = predict(ts, sampled_betas, design_matrix)
+    pred_mean = pred.mean("sample")
+    pred_std = pred.std("sample")
+
+    return pred_mean, pred_std

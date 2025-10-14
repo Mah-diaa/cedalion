@@ -1,13 +1,12 @@
 """Functions for reading and processing anatomical data."""
 
-import nibabel
 import os
 from typing import Dict, Tuple
 from pathlib import Path
 
 import nibabel
 import numpy as np
-import pandas as pd 
+import pandas as pd
 import xarray as xr
 
 from cedalion.dataclasses import affine_transform_from_numpy

@@ -10,8 +10,8 @@ from urllib.parse import quote
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = "cedalion"
-copyright = "2024, the cedalion developers"
-author = "the cedalion developers"
+copyright = "2024-2025, the Cedalion developers"
+author = "the Cedalion developers"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -126,6 +126,17 @@ nbsphinx_thumbnails = {
     'examples/*/*': '_static/IBS_Logo_sm.png',
 }
 
+## -- Nbsphinx open in google colab button -------------------------------------------
+
+nbsphinx_prolog = r"""
+.. raw:: html
+
+    <div style="text-align: right">
+        <a href="https://colab.research.google.com/github/ibs-lab/cedalion/blob/dev/{{ env.doc2path(env.docname, base=None) }}" target="_blank">
+            <img width="117" height="20" src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open in Colab"/>
+        </a>
+    </div>
+"""
 
 # -- linkcode ------- ----------------------------------------------------------------
 # adopted from: https://stackoverflow.com/a/75279988

@@ -9,9 +9,11 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from numpy.typing import ArrayLike
+from numpy.polynomial.legendre import legval
 
 import cedalion.typing as cdt
 import cedalion.xrutils as xrutils
+from cedalion.sigproc.frequency import sampling_rate
 
 from .basis_functions import TemporalBasisFunction
 
@@ -34,11 +36,11 @@ class DesignMatrix:
         return result
 
     def __repr__(self):
-        uregs = ",".join([f"'{r}'" for r in self.common.regressor.values])
+        cregs = ",".join([f"'{r}'" for r in self.common.regressor.values])
         cwregs = ",".join(
             [f"'{r}'" for cw in self.channel_wise for r in cw.regressor.values]
         )
-        return f"DesignMatrix(universal=[{uregs}], channel_wise=[{cwregs}])"
+        return f"DesignMatrix(common=[{cregs}], channel_wise=[{cwregs}])"
 
 
     def __and__(self, other: DesignMatrix):
@@ -256,6 +258,93 @@ def hrf_regressors(
 
     return DesignMatrix(common=regressors, channel_wise=[])
 
+# FIXME reduce overlap with hrf_regressors
+
+def hrf_extract_regressors(
+    ts: cdt.NDTimeSeries, stim: pd.DataFrame, basis_function: TemporalBasisFunction
+) -> DesignMatrix:
+    """Create regressors for extracting the fitted, unconvolved HRF.
+
+    The returned design matrix spans only the time range of the basis functions.
+    Regressors are not convolved.
+
+    Args:
+        ts (NDTimeSeries): Time series data.
+        stim (pd.DataFrame): Stimulus DataFrame.
+        basis_function (TemporalBasisFunction): TemporalBasisFunction object defining
+            the HRF.
+
+    Returns:
+        regressors (xr.DataArray): A DataArray containing the regressors.
+    """
+
+    # FIXME allow basis_function to be an xarray as returned by basis_function()
+    # so that users can pass their own individual hrf function
+
+    trial_types: np.ndarray = stim.trial_type.unique()
+
+    basis = basis_function(ts)
+
+    components = basis.component.values
+
+    # could be "chromo" or "wavelength"
+    other_dim = xrutils.other_dim(ts, "channel", "time")
+
+    n_time = basis.sizes["time"]
+    n_other = ts.sizes[other_dim]
+    n_components = basis.sizes["component"]
+    n_trial_types = len(trial_types)
+    n_regressors = n_trial_types * n_components
+
+    if other_dim in basis.dims:
+        if not set(basis[other_dim].values) == set(ts[other_dim].values):
+            raise ValueError(
+                f"basis and timeseries don't match in dimension '{other_dim}'"
+            )
+    else:
+        # if the basis function does not contain other_dim (e.g. the same HRF is applied
+        # to HbO and HbR), add other_dim by copying the array.
+        basis = xr.concat(n_other * [basis], dim=other_dim)
+        basis = basis.transpose("time", "component", other_dim)
+        basis = basis.assign_coords({other_dim: ts[other_dim]})
+
+    # basis.time may contain time-points before the stimulus onset. To account for this
+    # offset in the convolution shift the onset times.
+    shifted_stim = stim.copy()
+    shifted_stim["onset"] += basis.time.values.min()
+
+    #padded_time, pad_before = _pad_time_axis(ts.time.values, shifted_stim["onset"])
+
+    if n_components == 1:
+        regressor_names = [f"HRF {tt}" for tt in trial_types]
+    else:
+        regressor_names = [f"HRF {tt} {c}" for tt in trial_types for c in components]
+
+    regressors = np.zeros((n_time, n_regressors, n_other))
+
+    for i_tt, trial_type in enumerate(trial_types):
+        for i_comp in range(n_components):
+            i_reg = i_tt * n_components + i_comp
+            for i_other, other in enumerate(ts[other_dim].values):
+                bb = basis.sel({other_dim: other})
+                regressor = bb[:,i_comp]
+                regressor /= regressor.max()
+
+                regressors[:, i_reg, i_other] = regressor
+
+    regressors = xr.DataArray(
+        regressors,
+        dims=["time", "regressor", other_dim],
+        coords={
+            "time": basis.time.values,
+            "regressor": regressor_names,
+            other_dim: ts[other_dim].values,
+        },
+    )
+
+    return DesignMatrix(common=regressors, channel_wise=[])
+
+
 
 def drift_regressors(ts: cdt.NDTimeSeries, drift_order) -> DesignMatrix:
     """Create drift regressors.
@@ -291,6 +380,82 @@ def drift_regressors(ts: cdt.NDTimeSeries, drift_order) -> DesignMatrix:
     )
 
     return DesignMatrix(common=drift_regressors, channel_wise=[])
+
+
+def drift_legendre_regressors(ts : cdt.NDTimeSeries, order : int) -> DesignMatrix:
+    """Create drift regressors using Legende polynomials.
+
+    Args:
+        ts: time-series data.
+        order: generate polynomials of order 0...order
+
+    Returns:
+        xr.DataArray: A DataArray containing the drift regressors.
+    """
+
+    dim3 = xrutils.other_dim(ts, "channel", "time")
+    ndim3 = ts.sizes[dim3]
+
+    nt = ts.sizes["time"]
+    t = np.linspace(-1, 1, nt)
+    drift_regressors = np.zeros((nt, order + 1, ndim3))
+
+    # for coefficients c with length n+1 legval calculates
+    # p(x) = c[0]*L0(x) + c[1]*L1(x) + ... + c[n]*Ln(x)
+    # we want only Ln(x)
+
+    for i in range(0, order + 1):
+        coeffs = [0]*i + [1]
+        tmp = np.sqrt((2 * i + 1) / 2) * legval(t, coeffs)
+        tmp /= np.max(np.abs(tmp))
+        drift_regressors[:, i, :] = tmp[:,None]
+
+    regressor_names = [f"Drift LP {i}" for i in range(order + 1)]
+
+    drift_regressors = xr.DataArray(
+        drift_regressors,
+        dims=["time", "regressor", dim3],
+        coords={"time": ts.time, "regressor": regressor_names, dim3: ts[dim3].values},
+    )
+
+    return DesignMatrix(common=drift_regressors, channel_wise=[])
+
+
+def drift_cosine_regressors(ts: cdt.NDTimeSeries, fmax: cdt.QFrequency) -> DesignMatrix:
+    """Create drift regressors using cosine basis functions.
+
+    Args:
+        ts: time-series data.
+        fmax: High-pass cutoff frequency
+
+    Returns:
+        xr.DataArray: A DataArray containing the drift regressors.
+    """
+
+    dim3 = xrutils.other_dim(ts, "channel", "time")
+    ndim3 = ts.sizes[dim3]
+
+    nt = ts.sizes["time"]
+    fs = sampling_rate(ts)
+    ncosines = int(np.floor(2 * nt * fmax / fs))
+
+    drift_regressors = np.zeros((nt, ncosines, ndim3))
+
+    tt = np.pi * (np.arange(nt) + 0.5) / nt
+
+    for i in range(ncosines):
+        drift_regressors[:, i, :] = np.cos(tt * i)[:,None]
+
+    regressor_names = [f"Drift Cos {i}" for i in range(ncosines)]
+
+    drift_regressors = xr.DataArray(
+        drift_regressors,
+        dims=["time", "regressor", dim3],
+        coords={"time": ts.time, "regressor": regressor_names, dim3: ts[dim3].values},
+    )
+
+    return DesignMatrix(common=drift_regressors, channel_wise=[])
+
 
 
 def _pad_time_axis(time: ArrayLike, onsets: ArrayLike):

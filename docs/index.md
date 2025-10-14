@@ -15,7 +15,7 @@ getting_started/index.md
 data_structures/index.md
 
 community/index.md
-LICENSE.md
+../LICENSE.md
 ```
 
 ```{toctree}
@@ -26,6 +26,7 @@ data_io/index
 sigproc/index
 machine_learning/index
 image_reco/index
+physio/index
 plot_vis/index
 synth/index
 ```
