@@ -1,31 +1,35 @@
 
 from __future__ import annotations
-from dataclasses import dataclass
-import logging
-from typing import Optional
+
 import os
-import warnings
-import sys
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
 import scipy
-import numpy as np 
+import trimesh
 import xarray as xr
-import trimesh 
 from scipy.spatial import KDTree
 
-import cedalion 
-from cedalion import xrutils, units
-from dataclasses import dataclass
+import cedalion
 import cedalion.dataclasses as cdc
+import cedalion.datasets
 import cedalion.typing as cdt
+from cedalion import xrutils
+from cedalion.dot.utils import map_segmentation_mask_to_surface
+from cedalion.geometry.landmarks import LandmarksBuilder1010
+from cedalion.geometry.ellipsoid import get_landmarks_for_headsize
+from cedalion.geometry.registration import (
+    register_trans_rot_isoscale,
+    register_general_affine,
+)
 from cedalion.geometry.segmentation import (
     surface_from_segmentation,
     voxels_from_segmentation,
 )
-from cedalion.dot.utils import map_segmentation_mask_to_surface
-from cedalion.geometry.registration import register_trans_rot_isoscale
 from cedalion.io import read_mrk_json, read_parcellations, read_segmentation_masks
+
 
 @dataclass
 class TwoSurfaceHeadModel:
@@ -91,30 +95,29 @@ class TwoSurfaceHeadModel:
             "skull": "skull.nii",
             "wm": "wm.nii",
         },
-        landmarks_ras_file: Optional[str] = None,
+        landmarks_ras_file: str | None = None,
         brain_seg_types: list[str] = ["gm", "wm"],
         scalp_seg_types: list[str] = ["scalp"],
         smoothing: float = 0.5,
-        brain_face_count: Optional[int] = 180000,
-        scalp_face_count: Optional[int] = 60000,
+        brain_face_count: int | None = 180000,
+        scalp_face_count: int | None = 60000,
         fill_holes: bool = True,
     ) -> "TwoSurfaceHeadModel":
         """Constructor from binary masks as gained from segmented MRI scans.
 
         Args:
-            segmentation_dir (str): Folder containing the segmentation masks in NIFTI
+            segmentation_dir: Folder containing the segmentation masks in NIFTI
                 format.
-            mask_files (Dict[str, str]): Dictionary mapping segmentation types to NIFTI
-                filenames.
-            landmarks_ras_file (Optional[str]): Filename of the landmarks in RAS space.
-            brain_seg_types (list[str]): List of segmentation types to be included in
+            mask_files: Dictionary mapping segmentation types to NIFTI filenames.
+            landmarks_ras_file: Filename of the landmarks in RAS space.
+            brain_seg_types: List of segmentation types to be included in
                 the brain surface.
-            scalp_seg_types (list[str]): List of segmentation types to be included in
+            scalp_seg_types: List of segmentation types to be included in
                 the scalp surface.
-            smoothing(float): Smoothing factor for the brain and scalp surfaces.
-            brain_face_count (Optional[int]): Number of faces for the brain surface.
-            scalp_face_count (Optional[int]): Number of faces for the scalp surface.
-            fill_holes (bool): Whether to fill holes in the segmentation masks.
+            smoothing: Smoothing factor for the brain and scalp surfaces.
+            brain_face_count: Number of faces for the brain surface.
+            scalp_face_count: Number of faces for the scalp surface.
+            fill_holes: Whether to fill holes in the segmentation masks.
         """
 
         # load segmentation mask
@@ -215,12 +218,12 @@ class TwoSurfaceHeadModel:
         },
         brain_surface_file: str = None,
         scalp_surface_file: str = None,
-        landmarks_ras_file: Optional[str] = None,
+        landmarks_ras_file: str | None = None,
         brain_seg_types: list[str] = ["gm", "wm"],
         scalp_seg_types: list[str] = ["scalp"],
         smoothing: float = 0.5,
-        brain_face_count: Optional[int] = 180000,
-        scalp_face_count: Optional[int] = 60000,
+        brain_face_count: int | None = 180000,
+        scalp_face_count: int | None = 60000,
         fill_holes: bool = False,
         parcel_file: Path | str | None = None,
 
@@ -228,21 +231,22 @@ class TwoSurfaceHeadModel:
         """Constructor from seg.masks, brain and head surfaces as gained from MRI scans.
 
         Args:
-            segmentation_dir (str): Folder containing the segmentation masks in NIFTI
+            segmentation_dir: Folder containing the segmentation masks in NIFTI
                 format.
-            mask_files (dict[str, str]): Dictionary mapping segmentation types to NIFTI
+            mask_files: Dictionary mapping segmentation types to NIFTI
                 filenames.
-            brain_surface_file (str): Path to the brain surface.
-            scalp_surface_file (str): Path to the scalp surface.
-            landmarks_ras_file (Optional[str]): Filename of the landmarks in RAS space.
-            brain_seg_types (list[str]): List of segmentation types to be included in
+            brain_surface_file: Path to the brain surface.
+            scalp_surface_file: Path to the scalp surface.
+            landmarks_ras_file: Filename of the landmarks in RAS space.
+            brain_seg_types: List of segmentation types to be included in
                 the brain surface.
-            scalp_seg_types (list[str]): List of segmentation types to be included in
+            scalp_seg_types: List of segmentation types to be included in
                 the scalp surface.
-            smoothing (float): Smoothing factor for the brain and scalp surfaces.
-            brain_face_count (Optional[int]): Number of faces for the brain surface.
-            scalp_face_count (Optional[int]): Number of faces for the scalp surface.
-            fill_holes (bool): Whether to fill holes in the segmentation masks.
+            smoothing: Smoothing factor for the brain and scalp surfaces.
+            brain_face_count: Number of faces for the brain surface.
+            scalp_face_count: Number of faces for the scalp surface.
+            fill_holes: Whether to fill holes in the segmentation masks.
+            parcel_file: path to the json file mapping vertices to parcels.
 
         Returns:
             TwoSurfaceHeadModel: An instance of the TwoSurfaceHeadModel class.
@@ -346,6 +350,22 @@ class TwoSurfaceHeadModel:
             voxel_to_vertex_brain=voxel_to_vertex_brain,
             voxel_to_vertex_scalp=voxel_to_vertex_scalp,
         )
+
+
+    def __repr__(self):
+        tissue_types = ", ".join(self.segmentation_masks.segmentation_type.values)
+        return (
+            f"TwoSurfaceHeadModel(\n"
+            f"  crs: {self.crs}\n"
+            f"  tissue_types: {tissue_types}\n"
+            f"  brain faces: {self.brain.nfaces} vertices: {self.brain.nvertices} "
+            f"units: {self.brain.units}\n"
+            f"  scalp faces: {self.scalp.nfaces} vertices: {self.scalp.nvertices} "
+            f"units: {self.scalp.units}\n"
+            f"  landmarks: {len(self.landmarks)}\n"
+            ")"
+        )
+
 
     @property
     def crs(self):
@@ -580,3 +600,115 @@ class TwoSurfaceHeadModel:
 
         points.values = snapped
         return points
+
+
+    def scale_to_landmarks(
+        self,
+        target_landmarks : cdt.LabeledPointCloud
+    ) -> "TwoSurfaceHeadModel":
+        if self.crs == "ijk":
+            landmarks_ras = self.landmarks.points.apply_transform(self.t_ijk2ras)
+        else:
+            landmarks_ras = self.landmarks
+
+        t_ras2scaled = register_general_affine(target_landmarks, landmarks_ras)
+
+        t_ijk2scaled = t_ras2scaled @ self.t_ijk2ras
+        t_scaled2ijk = xrutils.pinv(t_ijk2scaled)
+
+        if self.crs == "ijk":
+            result = self.apply_transform(t_ijk2scaled)
+        else:
+            result = self.apply_transform(t_ijk2scaled)
+
+
+        result.t_ijk2ras = t_ijk2scaled
+        result.t_ras2ijk = t_scaled2ijk
+
+        return result
+
+    def scale_to_headsize(
+        self, circumference: cdt.QLength, nz_cz_iz: cdt.QLength, lpa_cz_rpa: cdt.QLength
+    ) -> "TwoSurfaceHeadModel":
+        ellipsoid_landmarks = get_landmarks_for_headsize(
+            circumference, nz_cz_iz, lpa_cz_rpa
+        )
+
+        return self.scale_to_landmarks(ellipsoid_landmarks)
+
+
+
+
+@lru_cache
+def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
+    """Create a TwoSurfaceHeadmodel for common atlases.
+
+    Onc created, this function caches a head model.
+
+    Args:
+        model: either colin27 or icbm152
+    Returns:
+        The loaded head model with 1010-landmarks and parcel labels assigned.
+    """
+
+    AVAILABLE_MODELS = ["colin27", "icbm152"]
+
+    if model == "colin27":
+        SEG_DATADIR, mask_files, landmarks_file = (
+            cedalion.datasets.get_colin27_segmentation()
+        )
+        PARCEL_FILE = cedalion.datasets.get_colin27_parcel_file()
+
+        head_ijk = TwoSurfaceHeadModel.from_surfaces(
+            segmentation_dir=SEG_DATADIR,
+            mask_files=mask_files,
+            brain_surface_file=os.path.join(SEG_DATADIR, "mask_brain.obj"),
+            scalp_surface_file=os.path.join(SEG_DATADIR, "mask_scalp.obj"),
+            landmarks_ras_file=landmarks_file,
+            parcel_file=PARCEL_FILE,
+            brain_face_count=None,
+            scalp_face_count=None,
+        )
+
+        head_ijk.t_ijk2ras = head_ijk.t_ijk2ras.rename({"aligned" : "mni"})
+        head_ijk.t_ras2ijk = head_ijk.t_ras2ijk.rename({"aligned" : "mni"})
+
+        # FIXME precompute landmark builder
+        head_ras = head_ijk.apply_transform(head_ijk.t_ijk2ras)
+        builder = LandmarksBuilder1010(head_ras.scalp, head_ras.landmarks)
+        head_ras.landmarks = builder.build()
+        head_ijk = head_ras.apply_transform(head_ras.t_ras2ijk)
+
+    elif model == "icbm152":
+        SEG_DATADIR, mask_files, landmarks_file = (
+            cedalion.datasets.get_icbm152_segmentation()
+        )
+
+        PARCEL_FILE = cedalion.datasets.get_icbm152_parcel_file()
+
+        head_ijk = TwoSurfaceHeadModel.from_surfaces(
+            segmentation_dir=SEG_DATADIR,
+            mask_files=mask_files,
+            brain_surface_file=os.path.join(SEG_DATADIR, "mask_brain.obj"),
+            scalp_surface_file=os.path.join(SEG_DATADIR, "mask_scalp.obj"),
+            landmarks_ras_file=landmarks_file,
+            parcel_file=PARCEL_FILE,
+            brain_face_count=None,
+            scalp_face_count=None,
+        )
+
+        head_ijk.t_ijk2ras = head_ijk.t_ijk2ras.rename({"aligned" : "mni"})
+        head_ijk.t_ras2ijk = head_ijk.t_ras2ijk.rename({"aligned" : "mni"})
+
+        # FIXME precompute landmark builder
+        head_ras = head_ijk.apply_transform(head_ijk.t_ijk2ras)
+        builder = LandmarksBuilder1010(head_ras.scalp, head_ras.landmarks)
+        head_ras.landmarks = builder.build()
+        head_ijk = head_ras.apply_transform(head_ras.t_ras2ijk)
+    else:
+        raise ValueError(
+            "Unknown head model. Available models are: " + ", ".join(AVAILABLE_MODELS)
+        )
+
+    return head_ijk
+

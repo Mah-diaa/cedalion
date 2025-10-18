@@ -517,63 +517,89 @@ class ForwardModel:
         save_Adot(sensitivity_fname, Adot)
 
 
-    # FIXME: better name for Adot * ext. coeffs
-    # FIXME: hardcoded for 2 chromophores (HbO and HbR) and wavelengths
-    @staticmethod
-    def compute_stacked_sensitivity(sensitivity: xr.DataArray):
-        """Compute stacked HbO and HbR sensitivity matrices from fluence.
+    def compute_stacked_sensitivity(
+        sensitivity: xr.DataArray, spectrum: str = "prahl"
+    ) -> xr.DataArray:
+        """Stack sensitivity matrices and incorporate extinction coefficients.
+
+        For image reconstruction the 3D sensitivity arrays must be transformed into
+        invertible 2D matrices and extinction coefficients must be incorporated.
+        This function accepts sensitivities both in image space (Adot, vertices) or in
+        spatial basis function space (H, kernels). The dimensions get transformed from
+        (channel, vertex) to (flat_channel, flat_vertex) or (channel, kernel) to
+        (flat_channel, flat_kernel), respectively.
 
         Args:
-            sensitivity (xr.DataArray): Sensitivity matrix for each vertex and
+            sensitivity: Sensitivity matrix (Adot/H ) for each vertex/kernel and
                 wavelength.
+            spectrum: name of the extinction coefficient spectrum
 
         Returns:
-            xr.DataArray: Stacked sensitivity matrix for each channel and vertex.
+            Stacked sensitivity matrix for each channel and vertex.
+            shape = (flat_channel, flat_vertex)
         """
 
         assert "wavelength" in sensitivity.dims
         wavelengths = sensitivity.wavelength.values
-        assert len(wavelengths) == 2
 
         if "units" in sensitivity.attrs:
             units_sens = pint.Unit(sensitivity.attrs["units"])
         else:
             units_sens = pint.Unit("mm")
 
-        ec = cedalion.nirs.get_extinction_coefficients("prahl", wavelengths)
+        ec = cedalion.nirs.get_extinction_coefficients(spectrum, wavelengths)
 
         units_ec = ec.pint.units
         ec = ec.pint.dequantify()
 
         units_A = units_sens * units_ec
 
-        nchannel = sensitivity.sizes["channel"]
-        nvertices = sensitivity.sizes["vertex"]
-        A = np.zeros((2 * nchannel, 2 * nvertices))
+        if "vertex" in sensitivity.dims:
+            vertex_dim = "vertex"
+            flat_vertex_dim = "flat_vertex"
+            vertex_coords = sensitivity.vertex.values
+        elif "kernel" in sensitivity.dims:
+            vertex_dim = "kernel"
+            flat_vertex_dim = "flat_kernel"
+            vertex_coords = sensitivity.kernel.values
+        else:
+            raise ValueError("sensitivity must have vertex or kernel dimension.")
 
-        wl1, wl2 = wavelengths
+
+        nchannel = sensitivity.sizes["channel"]
+        nvertices = sensitivity.sizes[vertex_dim]
+        nwavelengths = len(wavelengths)
+        chromos = ec.chromo.values
+        nchromos = len(chromos)
+
+        A = np.zeros((nwavelengths * nchannel, nchromos * nvertices))
+
         # fmt: off
-        A[:nchannel, :nvertices] = ec.sel(chromo="HbO", wavelength=wl1).values * sensitivity.sel(wavelength=wl1) # noqa: E501
-        A[:nchannel, nvertices:] = ec.sel(chromo="HbR", wavelength=wl1).values * sensitivity.sel(wavelength=wl1) # noqa: E501
-        A[nchannel:, :nvertices] = ec.sel(chromo="HbO", wavelength=wl2).values * sensitivity.sel(wavelength=wl2) # noqa: E501
-        A[nchannel:, nvertices:] = ec.sel(chromo="HbR", wavelength=wl2).values * sensitivity.sel(wavelength=wl2) # noqa: E501
+        for i_wl, wl in enumerate(wavelengths):
+            for i_ch, chromo in enumerate(chromos):
+                c0 = i_wl * nchannel
+                c1 = (i_wl + 1) * nchannel
+                v0 = i_ch * nvertices
+                v1 = (i_ch + 1) * nvertices
+
+                A[c0:c1, v0:v1] = ec.sel(chromo=chromo, wavelength=wl).values * sensitivity.sel(wavelength=wl)  # noqa: E501
         # fmt: on
 
-        is_brain = np.hstack([sensitivity.is_brain, sensitivity.is_brain])
-        flat_chromo = ["HbO"] * nvertices + ["HbR"] * nvertices
-        flat_wavelength = [wl1] * nchannel + [wl2] * nchannel
+        is_brain = np.hstack([sensitivity.is_brain] * nchromos)
+        flat_chromo = [ch for ch in chromos for _ in range(nvertices)]
+        flat_wavelength = [wl for wl in wavelengths for _ in range(nchannel)]
         channel = sensitivity.channel.values
         source = sensitivity.source.values
         detector = sensitivity.detector.values
-        flat_channel = np.hstack((channel, channel))
-        flat_source = np.hstack((source, source))
-        flat_detector = np.hstack((detector, detector))
-        vertex = np.hstack([np.arange(nvertices), np.arange(nvertices)])
+        flat_channel = np.hstack([channel] * nwavelengths)
+        flat_source = np.hstack([source] * nwavelengths)
+        flat_detector = np.hstack([detector] * nwavelengths)
+        flat_vertex_coords = np.hstack([vertex_coords] * nchromos)
 
         coords = {
-            "is_brain": ("flat_vertex", is_brain),
-            "chromo": ("flat_vertex", flat_chromo),
-            "vertex": ("flat_vertex", vertex),
+            "is_brain": (flat_vertex_dim, is_brain),
+            "chromo": (flat_vertex_dim, flat_chromo),
+            vertex_dim: (flat_vertex_dim, flat_vertex_coords),
             "wavelength": ("flat_channel", flat_wavelength),
             "channel": ("flat_channel", flat_channel),
             "source": ("flat_channel", flat_source),
@@ -581,12 +607,12 @@ class ForwardModel:
         }
 
         if "parcel" in sensitivity.coords:
-            parcels = np.hstack([sensitivity.parcel.values, sensitivity.parcel.values])
-            coords["parcel"] = ("flat_vertex", parcels)
+            flat_parcels = np.hstack([sensitivity.parcel.values] * nchromos)
+            coords["parcel"] = (flat_vertex_dim, flat_parcels)
 
         A = xr.DataArray(
             A,
-            dims=("flat_channel", "flat_vertex"),
+            dims=("flat_channel", flat_vertex_dim),
             coords=coords,
             attrs={"units": str(units_A)},
         )

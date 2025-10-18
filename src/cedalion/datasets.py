@@ -5,7 +5,6 @@ import pickle
 from gzip import GzipFile
 from pathlib import Path
 import pandas as pd
-from cedalion.dot.head_model import TwoSurfaceHeadModel
 
 import pooch
 import xarray as xr
@@ -106,16 +105,6 @@ def get_colin27_segmentation(downsampled=False):
     landmarks_ras_file = "landmarks.mrk.json"
 
     return basedir, mask_files, landmarks_ras_file
-
-
-def get_colin27_headmodel():
-    """Retrieves the Colin27 headmodel, based on :cite:t:`Holmes1998`."""
-    fnames = DATASETS.fetch("colin2SHM.zip", processor=pooch.Unzip())
-    directory = Path(fnames[0]).parent
-    head_model = TwoSurfaceHeadModel.load(directory)
-    head_model.brain.units = cedalion.units.mm
-    head_model.scalp.units = cedalion.units.mm
-    return head_model
 
 
 def get_colin27_parcel_file():

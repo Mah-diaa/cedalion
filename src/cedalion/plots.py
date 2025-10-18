@@ -28,7 +28,7 @@ import cedalion.nirs
 import cedalion.typing as cdt
 from cedalion import Quantity
 from cedalion.dataclasses import PointType
-from cedalion.dot.head_model import TwoSurfaceHeadModel
+#from cedalion.dot.head_model import TwoSurfaceHeadModel
 
 
 def plot_montage3D(amp: xr.DataArray, geo3d: xr.DataArray):
@@ -1111,7 +1111,7 @@ def scalp_plot_gif(
 
 def image_recon(
     X: cdt.NDTimeSeries,
-    head: TwoSurfaceHeadModel,
+    head: "cedalion.dot.TwoSurfaceHeadModel",
     cmap: str | matplotlib.colors.Colormap = 'seismic',
     clim=None,
     view_type: str ='hbo_brain',
@@ -1282,7 +1282,7 @@ def image_recon(
 
 def image_recon_view(
     X_ts: cdt.NDTimeSeries,
-    head: TwoSurfaceHeadModel,
+    head: "cedalion.dot.TwoSurfaceHeadModel",
     cmap: str | matplotlib.colors.Colormap = 'seismic',
     clim = None,
     view_type: str ='hbo_brain',
@@ -1436,7 +1436,7 @@ def image_recon_view(
 
 def image_recon_multi_view(
     X_ts: cdt.NDTimeSeries,
-    head: TwoSurfaceHeadModel,
+    head: "cedalion.dot.TwoSurfaceHeadModel",
     cmap: str | matplotlib.colors.Colormap = 'seismic',
     clim = None,
     view_type: str ='hbo_brain',

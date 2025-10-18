@@ -82,12 +82,14 @@ TISSUE_PROPS_REFRACTION = {
 # FIXME allow for wavelength dependencies
 
 
-def get_tissue_properties(segmentation_masks: xr.DataArray, wavelengths: list) -> np.ndarray:
+def get_tissue_properties(
+    segmentation_masks: xr.DataArray, wavelengths: list
+) -> np.ndarray:
     """Return tissue properties for the given segmentation mask."""
     ntissues = segmentation_masks.sizes["segmentation_type"] + 1
     nwavelengths = len(wavelengths)
     tissue_props = np.zeros((ntissues, 4, nwavelengths))
-    tissue_props[0, :, :] = [0.0, 0.0, 1.0, 1.0]  # background
+    tissue_props[0, :, :] = np.asarray([0.0, 0.0, 1.0, 1.0])[:, None]  # background
 
     for i_wl in range(nwavelengths):
 

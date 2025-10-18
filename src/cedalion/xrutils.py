@@ -306,3 +306,23 @@ def unstack(
         unstacked = unstacked.assign_coords({unstack_dim: coords_array})
 
     return unstacked
+
+
+def contract(a1: xr.DataArray, a2: xr.DataArray, dim: str | list[str]) -> xr.DataArray:
+    """Apply xr.dot after asserting compatible shapes.
+
+    xr.dot will silently multiply arrays along dimensions which differ in shape if
+    these arrays have an overlap in coordinates. This function requires an exact
+    match in coordinates before calling xr.dot.
+
+    Args:
+        a1: first operand
+        a2: second operand
+        dim: dimension(s) to contract over
+
+    Returns:
+        the result of xr.dot.
+    """
+
+    with xr.set_options(arithmetic_join="exact"):
+        return xr.dot(a1, a2, dim=dim)

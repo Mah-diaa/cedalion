@@ -1,5 +1,5 @@
 from . forward_model import ForwardModel
-from . head_model import TwoSurfaceHeadModel
+from . head_model import TwoSurfaceHeadModel, get_standard_headmodel
 from . image_recon import (
     ImageRecon,
     RegularizationParams,
