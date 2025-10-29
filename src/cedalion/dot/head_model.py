@@ -668,6 +668,7 @@ def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
             parcel_file=PARCEL_FILE,
             brain_face_count=None,
             scalp_face_count=None,
+            smoothing=0,
         )
 
         head_ijk.t_ijk2ras = head_ijk.t_ijk2ras.rename({"aligned" : "mni"})
@@ -695,6 +696,7 @@ def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
             parcel_file=PARCEL_FILE,
             brain_face_count=None,
             scalp_face_count=None,
+            smoothing=0,
         )
 
         head_ijk.t_ijk2ras = head_ijk.t_ijk2ras.rename({"aligned" : "mni"})
