@@ -121,7 +121,7 @@ class ForwardModel:
         length = xrutils.norm(pts_ras[1] - pts_ras[0], pts_ras.points.crs)
         return length.pint.magnitude.item()
 
-    def _get_fluence_from_mcx(self, i_optode: int, i_wl: int, **kwargs) -> np.ndarray:
+    def _get_fluence_from_mcx(self, i_optode: int, i_wl: int=0, **kwargs) -> np.ndarray:
         """Run MCX simulation to get fluence for one optode.
 
         Args:
