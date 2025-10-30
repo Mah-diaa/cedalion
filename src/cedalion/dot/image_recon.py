@@ -1038,7 +1038,7 @@ class ImageRecon:
         Returns:
             xr.DataArray: pseudoinverse W.
         """
-        max_eig = np.max(np.linalg.eigvals(F))
+        max_eig = np.max(np.linalg.eigvalsh(F)) # F~=AA^T is real and symmetric
         lambda_meas = self.reg_params.alpha_meas * max_eig
 
         # A is 2D. Either (vertex x channel) or (kernel x channel)
