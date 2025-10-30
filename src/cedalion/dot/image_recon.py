@@ -325,7 +325,7 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
             {
                 "channel": Adot.channel,
                 "wavelength": Adot.wavelength,
-                "kernel": np.concat(
+                "kernel": np.concatenate(
                     [self.G_brain.kernel.values, self.G_scalp.kernel.values]
                 ),
                 "is_brain": ("kernel", is_brain),
