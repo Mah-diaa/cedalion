@@ -333,11 +333,12 @@ class ForwardModel:
         mesh = ff.base.stndmesh()
         # make the optical property matrix; unit in mm-1
         tissueprop = np.zeros((self.tissue_properties.shape[0]-1, 4))
+        i_wl = 0 # FIXME
         for i in range(tissueprop.shape[0]):
             tissueprop[i,0] = i+1
-            tissueprop[i,1] = self.tissue_properties[i+1, 0]
-            tissueprop[i,2] = self.tissue_properties[i+1, 1] * (1-self.tissue_properties[i+1, 2]) # noqa: E501
-            tissueprop[i,3] = self.tissue_properties[i+1, 3]
+            tissueprop[i,1] = self.tissue_properties[i+1, 0, i_wl]
+            tissueprop[i,2] = self.tissue_properties[i+1, 1, i_wl] * (1-self.tissue_properties[i+1, 2, i_wl]) # noqa: E501
+            tissueprop[i,3] = self.tissue_properties[i+1, 3, i_wl]
 
         # all optodes x all optodes
         sources = ff.base.optode(coord=self.optode_pos.data)
