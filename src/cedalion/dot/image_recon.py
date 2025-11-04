@@ -1024,10 +1024,11 @@ class ImageRecon:
 
         Args:
             y: optical density time series or time point data.
-            c_meas: Measurement covariance matrix (optional).
+            c_meas: Diagonal elements of the measurement covariance matrix (optional).
+                dims: wavelength x channel.
 
         Returns:
-            cdt.NDTimeSeries: Reconstructed images.
+            Reconstructed images.
         """
 
         # y is optical density and dimensionless. Dequantify.
