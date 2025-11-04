@@ -3,7 +3,6 @@
 import hashlib
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -28,22 +27,59 @@ logger = logging.getLogger("cedalion")
 
 ReconMode = Literal["conc", "mua", "mua2conc"]
 
+# predefined parameter sets
 
-@dataclass
-class RegularizationParams:
-    """Parameters controlling the regularization of the inverse problem.
+# we could define constants of parameters that work well together, e.g. based on
+# Laura's parameter scans:
+REG_TIKHONOV_ONLY = dict(
+    alpha_meas=0.001,
+    alpha_spatial=None,
+    apply_c_meas=False,
+)
 
-    Args:
-        alpha_meas: ...
-        ...
-    """
+REG_PAPER_MUA_SBF = dict(
+    alpha_meas=1e4,
+    alpha_spatial=1e-2,
+    apply_c_meas=True,
+)
+"""Optimal set of regularization parameters according to an optimization study for a
+ball squeezing dataset. :cite:t:`Carlton2025`.
+"""
 
-    alpha_meas: float
-    alpha_spatial: None | float
-    apply_c_meas: bool  # FIXME better name: measurement regularization
+SBF_GAUSSIANS_DENSE = dict(
+    mask_threshold=-2,
+    threshold_brain=1 * units.mm,
+    threshold_scalp=5 * units.mm,
+    sigma_brain=1 * units.mm,
+    sigma_scalp=5 * units.mm,
+)
+"""Optimal set of Gaussian SBF parameters according to an optimization study for a
+ball squeezing dataset. :cite:t:`Carlton2025`.
+"""
 
+SBF_GAUSSIANS_SPARSE = dict(
+    mask_threshold=-2,
+    threshold_brain=5 * units.mm,
+    threshold_scalp=20 * units.mm,
+    sigma_brain=5 * units.mm,
+    sigma_scalp=20 * units.mm,
+)
+"""A sparse set of gaussians SBFs."""
 
-# FIXME define the proper interface
+# FIXME
+# likewise, if there are any heuristics how to set these parameters, we could offer
+# functions to compute them
+#def estimate_reg_params(*args) -> dict:
+#    """Estimate regularization parameters from data.
+#
+#    Args:
+#        *args: Variable arguments for parameter estimation.
+#
+#    Returns:
+#        Estimated regularization parameters.
+#    """
+#    pass
+
 class SpatialBasisFunctions(ABC):
     """Base for SBF implementations."""
 
@@ -505,6 +541,21 @@ class OriginalGaussianSpatialBasisFunctions:
         return sbf
 
 class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
+    """Gaussian Spatial Basis Functions.
+
+    Note: This implementation differs from the original one by a factor 2pi
+    in the denominator of the gaussians.
+
+    Args:
+        head_model: a TwoSurfaceHeadModel with brain and scalp surfaces
+        Adot : the sensitivity matrix
+        threshold_brain: the distance between kernel centers on the brain
+        threshold_scalp: the distance between kernel centers on scalp
+        sigma_brain: the width of the gaussians on the brain
+        sigma_scalp : the width of the gaussians on the scalp
+        mask_threshold: log10(sensitivity) threshold for vertices to be considered
+    """
+
     def __init__(
         self,
         head_model: TwoSurfaceHeadModel,
@@ -515,20 +566,6 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         sigma_scalp: cdt.QLength,
         mask_threshold: float,
     ):
-        """Gaussian Spatial Basis Functions.
-
-        Note: This implementation differs from the one from the paper by a factor 2pi
-        in the denominator of the gaussians.
-
-        Args:
-            head_model: TBD
-            Adot : TBD
-            threshold_brain: TBD
-            threshold_scalp: TBD
-            sigma_brain: TBD
-            sigma_scalp : TBD
-            mask_threshold: TBD, mention log scale
-        """
         self.threshold_brain = threshold_brain
         self.threshold_scalp = threshold_scalp
         self.sigma_brain = sigma_brain
@@ -566,13 +603,13 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         """
 
         intensity = np.log10(
-            Adot.isel(wavelength=wavelength_idx)
+            Adot.isel(wavelength=wavelength_idx) # FIXME maybe min over wavelengths?
             .sum("channel")
             .clip(min=10 ** (self.mask_threshold - 1))  # avoid log10(0)
         )
 
         mask = intensity > self.mask_threshold
-        mask = mask.drop_vars("wavelength")  # keep the is_brain coordinate
+        mask = mask.drop_vars("wavelength")  # but keep the is_brain coordinate
         self._mask = mask
 
 
@@ -894,45 +931,7 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
 
 
 
-# we could define constants of parameters that work well together, e.g. based on
-# Laura's parameter scans:
-REG_TIKHONOV_ONLY = RegularizationParams(
-    alpha_meas=0.001, alpha_spatial=None, apply_c_meas=False
-)
 
-REG_TIKHONOV_SPATIAL = RegularizationParams(
-    alpha_meas=0.01, alpha_spatial=0.001, apply_c_meas=False
-)
-
-SBF_GAUSSIANS_DENSE = dict(
-    mask_threshold=-2,
-    threshold_brain=1 * units.mm,
-    threshold_scalp=5 * units.mm,
-    sigma_brain=1 * units.mm,
-    sigma_scalp=5 * units.mm,
-)
-
-SBF_GAUSSIANS_SPARSE = dict(
-    mask_threshold=-2,
-    threshold_brain=5 * units.mm,
-    threshold_scalp=20 * units.mm,
-    sigma_brain=5 * units.mm,
-    sigma_scalp=20 * units.mm,
-)
-
-# FIXME
-# likewise, if there are any heuristics how to set these parameters, we could offer
-# functions to compute them
-#def estimate_reg_params(*args) -> RegularizationParams:
-#    """Estimate regularization parameters from data.
-#
-#    Args:
-#        *args: Variable arguments for parameter estimation.
-#
-#    Returns:
-#        RegularizationParams: Estimated regularization parameters.
-#    """
-#    pass
 
 
 class ImageRecon:
@@ -951,16 +950,31 @@ class ImageRecon:
 
         brain_only: if set to true, scalp vertices in Adot are ignored and the
             reconstruction is constrained to brain vertices
-        regularization_params: an instance of RegularizationParams
-        spatial_basis_functions: an optional instance of SpatialBasisFunctions.
+
+        alpha_meas: regularization parameter to adjust the balance between image
+            noise and spatial resolution.
+
+        alpha_spatial: regularization parameter that controls the effective depth of the
+            reconstruction by controlling how strongly the vertex sensitivities are
+            rescaled. A smaller alpha_spatial will more strongly suppress activation
+            that is reconstructed on the scalp.
+
+        apply_c_meas: controls whether the provided measurement covariance should be
+            used for measurement regularization.
+
+        spatial_basis_functions: if given reconstruct in the kernel space defined by the
+            provided spatial-basis-function implementation. The result is returned in
+            image space.
     """
     def __init__(
         self,
         Adot,
         *,
+        alpha_meas: float = 0.001,
+        alpha_spatial: float | None = None,
+        apply_c_meas: bool = False,
         recon_mode: ReconMode = "mua",
-        brain_only : bool = False,
-        regularization_params: RegularizationParams = REG_TIKHONOV_ONLY,
+        brain_only: bool = False,
         spatial_basis_functions: SpatialBasisFunctions | None = None,
     ):
         if recon_mode not in ["conc", "mua", "mua2conc"]:
@@ -970,9 +984,14 @@ class ImageRecon:
         # error handling of invalid params
 
         self.recon_mode = recon_mode
-        self.reg_params = regularization_params
+
+        # regularization parameters
+        self.alpha_meas = alpha_meas
+        self.alpha_spatial = alpha_spatial
+        self.apply_c_meas = apply_c_meas
+
         self.sbf = spatial_basis_functions
-        self.Adot = Adot # FIXME remove
+        self.Adot = Adot # FIXME can we remove this?
         self.brain_only = brain_only
 
         # cache intermediate matrices to avoid recomputations
@@ -987,7 +1006,7 @@ class ImageRecon:
         self._mua2conc : xr.DataArray = None
 
         # W invalidates when C_meas changes
-        self._W: xr.DataArray = None  # the pseudo_inverse (W=D@inv(F+ lambda_meas C))
+        self._W: xr.DataArray = None  # the pseudo_inverse (W=D@inv(F + lambda_meas C))
         self._W_input_hash: str = None  # a hash of C_meas. recompute W on C_meas change
 
         if self.sbf is not None:
@@ -1057,8 +1076,6 @@ class ImageRecon:
             self._W = self._get_W(c_meas)
 
         if self.recon_mode == "conc":
-            #c_meas = c_meas.stack(
-            # measurement=("wavelength", "channel")).sortby('wavelength')
             c_meas = fwm.stack_flat_channel(c_meas)
             conc_img = self._get_image_noise_conc(c_meas)
             return conc_img
@@ -1094,7 +1111,7 @@ class ImageRecon:
     # --- PREPARATION METHODS ---
 
     def _update_and_hash_cmeas(self, c_meas):
-        if self.reg_params.apply_c_meas:
+        if self.apply_c_meas:
             if c_meas is None:
                 raise NotImplementedError(
                     "c_meas must be provided when apply_c_meas is set."
@@ -1125,7 +1142,7 @@ class ImageRecon:
     def _prepare(self, Adot):
         """Precompute everything that depends only on inputs in the constructor."""
         # FIXME remove:
-        if self.reg_params.alpha_spatial is None:
+        if self.alpha_spatial is None:
             if self.brain_only:
                 Adot = self.Adot.sel(vertex=self.Adot.is_brain.values)
 
@@ -1160,7 +1177,7 @@ class ImageRecon:
         D = None
 
         # without spatial regularization:
-        if self.reg_params.alpha_spatial is None:
+        if self.alpha_spatial is None:
             # with spatial basis functions:
             if self.sbf is not None:
                 if self.recon_mode == "conc":
@@ -1220,7 +1237,7 @@ class ImageRecon:
 
         """
 
-        if self.reg_params.alpha_spatial is None:
+        if self.alpha_spatial is None:
             dim = A.dims[0]
             F = A.values @ A.values.T
             F_xr = xr.DataArray(F, dims=(f"{dim}_1", f"{dim}_2"))
@@ -1230,7 +1247,7 @@ class ImageRecon:
             b = B.max()
 
             # GET A_HAT
-            lambda_spatial = self.reg_params.alpha_spatial * b
+            lambda_spatial = self.alpha_spatial * b
 
             L = np.sqrt(B + lambda_spatial)
             Linv = 1/L.values
@@ -1324,7 +1341,7 @@ class ImageRecon:
         """
 
         max_eig = np.max(np.linalg.eigvalsh(F)) # F~=AA^T is real and symmetric
-        lambda_meas = self.reg_params.alpha_meas * max_eig
+        lambda_meas = self.alpha_meas * max_eig
 
         # A is 2D. Either (vertex x channel) or (kernel x channel)
 
