@@ -243,6 +243,7 @@ class TwoSurfaceHeadModel:
         scalp_face_count: int | None = 60000,
         fill_holes: bool = False,
         parcel_file: Path | str | None = None,
+        parcel_volume_file: Path | str | None = None,
     ) -> "TwoSurfaceHeadModel":
         """Constructor from seg.masks, brain and head surfaces as gained from MRI scans.
 
@@ -263,6 +264,7 @@ class TwoSurfaceHeadModel:
             scalp_face_count (Optional[int]): Number of faces for the scalp surface.
             fill_holes (bool): Whether to fill holes in the segmentation masks.
             parcel_file: Path to parcel json file.
+            parcel_volume_file: Path to parcel nifiti file (annotated voxels).
 
         Returns:
             TwoSurfaceHeadModel: An instance of the TwoSurfaceHeadModel class.
@@ -343,18 +345,35 @@ class TwoSurfaceHeadModel:
             "segmentation_type"
         )
 
-        voxel_to_vertex_brain = map_segmentation_mask_to_surface(
-            brain_mask, t_ijk2ras, brain_ijk.apply_transform(t_ijk2ras)
-        )
-        voxel_to_vertex_scalp = map_segmentation_mask_to_surface(
-            scalp_mask, t_ijk2ras, scalp_ijk.apply_transform(t_ijk2ras)
-        )
-
         # load parcellations
         if parcel_file is not None:
             parcels = cedalion.io.read_parcellations(parcel_file)
             assert len(parcels) == brain_ijk.nvertices
             brain_ijk.vertex_coords["parcel"] = np.asarray(parcels.Label.tolist())
+
+        if parcel_volume_file is not None:
+            import nibabel as nib
+            voxel_parcels = nib.load(parcel_volume_file)
+            affine = voxel_parcels.affine
+            voxel_parcels = voxel_parcels.get_fdata()
+            labels = np.unique(voxel_parcels.astype(int))
+            if os.path.exists(parcel_volume_file.replace('.nii.gz', '_labels.csv')):
+                with open(parcel_volume_file.replace('.nii.gz', '_labels.csv'), 'r') as f:
+                    lines = [l.split() for l in f.readlines()]
+                csv_cbig = {int(l[0]): l[1] for l in lines}
+                parcels_dict = parcels.Label.to_dict()
+                for i, l in csv_cbig.items():
+                    assert csv_cbig[i] == l
+            assert brain_mask.shape == voxel_parcels.shape
+            assert (t_ijk2ras.values == affine).all()
+
+        voxel_to_vertex_brain = map_segmentation_mask_to_surface(
+            brain_mask, t_ijk2ras, brain_ijk.apply_transform(t_ijk2ras),
+            parcels_vox=voxel_parcels.astype(int), parcels_verts=parcels
+        )
+        voxel_to_vertex_scalp = map_segmentation_mask_to_surface(
+            scalp_mask, t_ijk2ras, scalp_ijk.apply_transform(t_ijk2ras)
+        )
 
 
         return cls(

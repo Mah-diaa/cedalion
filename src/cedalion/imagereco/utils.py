@@ -18,6 +18,8 @@ def map_segmentation_mask_to_surface(
     segmentation_mask: xr.DataArray,
     transform_vox2ras: cdt.AffineTransform,  # FIXME
     surface: cdc.Surface,
+    parcels_vox: np.ndarray = None,
+    parcels_verts: xr.DataArray = None,
 ):
     """Find for each voxel the closest vertex on the surface.
 
@@ -27,6 +29,10 @@ def map_segmentation_mask_to_surface(
         transform_vox2ras (xr.DataArray): The affine transformation from voxel to RAS
             space.
         surface (cedalion.dataclasses.Surface): The surface to map the voxels to.
+        parcels_vox (np.ndarray, optional): An array of shape (nx, ny, nz) containing
+            the parcel label indices for each voxel.
+        parcels_verts (xr.DataArray, optional): An array of shape (nvertices,) containing
+            the parcellation information for each brain surface vertex.
 
     Returns:
         coo_array: A sparse matrix of shape (ncells, nvertices) that maps voxels to
@@ -50,6 +56,41 @@ def map_segmentation_mask_to_surface(
     dists, vertex_indices = surface.kdtree.query(
         cell_coords.values[cell_indices, :], workers=-1
     )
+
+    if parcels_vox is not None and parcels_verts is not None:
+        # overwrite voxel labels if in segmentation mask not in brain tissue
+        fs_num_labeled_vox = np.sum(np.flatnonzero(parcels_vox))
+        parcels_vox *= segmentation_mask.values
+        print("Num of labeled voxels before seg-masking: %d\nNum of labeled voxels  after seg-masking: %d" % (fs_num_labeled_vox, np.sum(np.flatnonzero(parcels_vox))))
+
+        # if parcellation is provided, overwrite vertex_indices with mapping
+        # constraint to vertices-mapping within the same parcel
+        for parcel_id in np.unique(parcels_vox):
+            if parcel_id == 0:
+                continue
+            # get cell indices within this parcel
+            parcels_vox_flat = parcels_vox.flatten()
+            parcel_cell_indices = np.argwhere(parcels_vox_flat[cell_indices] == parcel_id)[:, 0]
+            if len(parcel_cell_indices) == 0:
+                continue
+            # get vertices within this parcel
+            parcel_vertex_indices = np.where(
+                parcels_verts.index == parcel_id
+            )[0]
+            if len(parcel_vertex_indices) == 0:
+                continue
+            # build a KDTree for the parcel vertices
+            from scipy.spatial import KDTree
+            parcel_tree = KDTree(surface.vertices[parcel_vertex_indices, :])
+            # query the parcel_tree for the parcel_cell_indices
+            dists_parcel, vertex_indices_parcel = parcel_tree.query(
+                cell_coords.values[parcel_cell_indices, :], workers=-1
+            )
+            # map back to global vertex indices
+            global_vertex_indices_parcel = parcel_vertex_indices[vertex_indices_parcel]
+            # update vertex_indices for these cell indices
+
+            vertex_indices[parcel_cell_indices] = global_vertex_indices_parcel
 
     # construct a sparse matrix of shape (ncells, nvertices)
     # that maps voxels to cells
