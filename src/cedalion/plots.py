@@ -1179,6 +1179,8 @@ def image_recon(
     new_cmap_colors = np.vstack((cmap_obj(np.linspace(0, 1, 256))))
     custom_cmap = ListedColormap(new_cmap_colors)
 
+    X = X.pint.dequantify()
+
     # Separate the scalar data
     X_hbo_brain = X.sel(chromo='HbO')[X.is_brain.values]
     X_hbr_brain = X.sel(chromo='HbR')[X.is_brain.values]
