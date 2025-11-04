@@ -70,6 +70,10 @@ def test_TwoSurfaceHeadModel():
     )
     # save to folder
 
+    def iu(x):
+        """Ignore units."""
+        return x.pint.dequantify().values
+
     with tempfile.TemporaryDirectory() as dirpath:
         tmp_folder = os.path.join(dirpath, "test_head")
         head.save(tmp_folder)
@@ -80,8 +84,8 @@ def test_TwoSurfaceHeadModel():
         assert (head.segmentation_masks == head2.segmentation_masks).all()
         assert (head.brain.mesh.vertices == head2.brain.mesh.vertices).all()
         assert (head.brain.mesh.faces == head2.brain.mesh.faces).all()
-        assert (head.t_ijk2ras.data == head2.t_ijk2ras.data).all()
-        assert (head.t_ras2ijk.data == head2.t_ras2ijk.data).all()
+        assert (iu(head.t_ijk2ras) == iu(head2.t_ijk2ras)).all()
+        assert (iu(head.t_ras2ijk) == iu(head2.t_ras2ijk)).all()
         assert allclose(head.voxel_to_vertex_brain, head2.voxel_to_vertex_brain)
         assert allclose(head.voxel_to_vertex_scalp, head2.voxel_to_vertex_scalp)
 
