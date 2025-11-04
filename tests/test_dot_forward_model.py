@@ -8,8 +8,12 @@ import sys
 import xarray as xr
 
 import cedalion.datasets
-import cedalion.imagereco.forward_model as fw
+import cedalion.dot.forward_model as fw
 import cedalion.dataclasses as cdc
+import cedalion.nirs
+import cedalion.xrutils
+
+
 
 try:
     src_path = os.path.abspath(
@@ -47,6 +51,7 @@ def allclose(A, B, atol=1e-8):
 
 
 def test_TwoSurfaceHeadModel():
+    # cedalion.xrutils.unit_stripping_is_error() # FIXME triggers only on GH Actions.
     ### tests only save and load methods so far
     # prepare test head
     (
@@ -65,6 +70,10 @@ def test_TwoSurfaceHeadModel():
     )
     # save to folder
 
+    def iu(x):
+        """Ignore units."""
+        return x.pint.dequantify().values
+
     with tempfile.TemporaryDirectory() as dirpath:
         tmp_folder = os.path.join(dirpath, "test_head")
         head.save(tmp_folder)
@@ -75,8 +84,8 @@ def test_TwoSurfaceHeadModel():
         assert (head.segmentation_masks == head2.segmentation_masks).all()
         assert (head.brain.mesh.vertices == head2.brain.mesh.vertices).all()
         assert (head.brain.mesh.faces == head2.brain.mesh.faces).all()
-        assert (head.t_ijk2ras.values == head2.t_ijk2ras.values).all()
-        assert (head.t_ras2ijk.values == head2.t_ras2ijk.values).all()
+        assert (iu(head.t_ijk2ras) == iu(head2.t_ijk2ras)).all()
+        assert (iu(head.t_ras2ijk) == iu(head2.t_ras2ijk)).all()
         assert allclose(head.voxel_to_vertex_brain, head2.voxel_to_vertex_brain)
         assert allclose(head.voxel_to_vertex_scalp, head2.voxel_to_vertex_scalp)
 
@@ -247,3 +256,99 @@ def test_stacking_flat_vertex():
     assert unstacked.parcel.dims == ("vertex",)
 
     assert ts.pint.units == stacked.pint.units == unstacked.pint.units
+
+
+@pytest.mark.parametrize("n_wavelength", [1, 2,3])
+@pytest.mark.parametrize("n_chromo", [1, 2, 3])
+@pytest.mark.parametrize("vertex_dim", ["vertex", "kernel"])
+def test_compute_stacked_sensitivity(monkeypatch, n_wavelength, n_chromo, vertex_dim):
+    channels = ["S1D1", "S1D2"]
+    source = ["S1", "S1"]
+    detector = ["D1", "D2"]
+    vertices = [0,1,2]
+    is_brain = [True, True, False]
+
+    wavelengths = [800, 810, 820][:n_wavelength]
+    chromos = ["C0", "C1", "C2"][:n_chromo]
+
+    # monkey patch get_extinction_coefficients to yield dummy values for n_chromo
+    def mock_get_ext(spectrum, wavelengths):
+        ec = np.arange(n_wavelength * n_chromo).reshape(n_chromo, n_wavelength)
+        ec = xr.DataArray(
+            ec,
+            dims=["chromo", "wavelength"],
+            coords={
+                "chromo": chromos,
+                "wavelength": wavelengths,
+            },
+        ).pint.quantify("1 / millimeter / molar")
+        return ec
+
+    monkeypatch.setattr(cedalion.nirs, "get_extinction_coefficients", mock_get_ext)
+
+    # generate dummy sensitivity values
+    Adot = np.arange(len(channels) * len(vertices) * n_wavelength)
+    Adot = Adot.reshape(len(channels), len(vertices), n_wavelength)
+
+    Adot = xr.DataArray(
+        Adot,
+        dims=["channel", vertex_dim, "wavelength"],
+        coords={
+            "channel": ("channel", channels),
+            "source": ("channel", source),
+            "detector": ("channel", detector),
+            "wavelength": ("wavelength", wavelengths),
+            "is_brain": (vertex_dim, is_brain),
+        },
+        attrs={"units": "mm"},
+    )
+
+    stacked = fw.ForwardModel.compute_stacked_sensitivity(Adot)
+
+    if vertex_dim == "vertex":
+        assert stacked.dims == ("flat_channel", "flat_vertex")
+    elif vertex_dim == "kernel":
+        assert stacked.dims == ("flat_channel", "flat_kernel")
+    else:
+        raise ValueError("unreachable")
+
+    if n_wavelength == 1:
+        flat_channel = ["S1D1", "S1D2"]
+        flat_wavelength = [800, 800]
+        flat_source = ["S1", "S1"]
+        flat_detector = ["D1", "D2"]
+    elif n_wavelength == 2:
+        flat_channel = ["S1D1", "S1D2", "S1D1", "S1D2"]
+        flat_wavelength = [800, 800, 810, 810]
+        flat_source = ["S1", "S1", "S1", "S1"]
+        flat_detector = ["D1", "D2", "D1", "D2"]
+    elif n_wavelength == 3:
+        flat_channel = ["S1D1", "S1D2", "S1D1", "S1D2", "S1D1", "S1D2"]
+        flat_wavelength = [800, 800, 810, 810, 820, 820]
+        flat_source = ["S1", "S1", "S1", "S1", "S1", "S1"]
+        flat_detector = ["D1", "D2", "D1", "D2", "D1", "D2"]
+
+    if n_chromo == 1:
+        flat_vertex_coords = [0, 1, 2]
+        flat_is_brain = [True, True, False]
+        flat_chromo = ["C0", "C0", "C0"]
+    elif n_chromo == 2:
+        flat_vertex_coords = [0, 1, 2, 0, 1, 2]
+        flat_is_brain = [True, True, False, True, True, False]
+        flat_chromo = ["C0", "C0", "C0", "C1", "C1", "C1"]
+    elif n_chromo == 3:
+        flat_vertex_coords = [0, 1, 2, 0, 1, 2, 0, 1, 2]
+        flat_is_brain = [True, True, False, True, True, False, True, True, False]
+        flat_chromo = ["C0", "C0", "C0", "C1", "C1", "C1", "C2", "C2", "C2"]
+
+    vertex_coords = getattr(stacked, vertex_dim)
+
+    assert all(vertex_coords == np.asarray(flat_vertex_coords))
+    assert all(stacked.is_brain == np.asarray(flat_is_brain))
+    assert all(stacked.chromo == np.asarray(flat_chromo))
+    assert all(stacked.channel == np.asarray(flat_channel))
+    assert all(stacked.wavelength == np.asarray(flat_wavelength))
+    assert all(stacked.source == np.asarray(flat_source))
+    assert all(stacked.detector == np.asarray(flat_detector))
+
+    assert stacked.attrs["units"] == "1 / molar"

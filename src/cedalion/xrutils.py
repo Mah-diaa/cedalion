@@ -5,6 +5,7 @@ import warnings
 import numpy as np
 import pint
 import xarray as xr
+import scipy.sparse
 
 
 def pinv(array: xr.DataArray) -> xr.DataArray:
@@ -306,3 +307,86 @@ def unstack(
         unstacked = unstacked.assign_coords({unstack_dim: coords_array})
 
     return unstacked
+
+
+def contract(a1: xr.DataArray, a2: xr.DataArray, dim: str | list[str]) -> xr.DataArray:
+    """Apply xr.dot after asserting compatible shapes.
+
+    xr.dot will silently multiply arrays along dimensions which differ in shape if
+    these arrays have an overlap in coordinates. This function requires an exact
+    match in coordinates before calling xr.dot.
+
+    Args:
+        a1: first operand
+        a2: second operand
+        dim: dimension(s) to contract over
+
+    Returns:
+        the result of xr.dot.
+    """
+
+    with xr.set_options(arithmetic_join="exact"):
+        return xr.dot(a1, a2, dim=dim)
+
+def transpose_like(
+    a: xr.DataArray, target: xr.DataArray, dim_map: dict[str, str] | None = None
+) -> xr.DataArray:
+    """Transpose the dims in a to match the ordering in target."""
+
+    target_dims = list(target.dims)
+    if not dim_map:
+        dim_map = {}
+
+    new_order = []
+    for d in a.dims:
+        if d in target_dims:
+            new_order.append(target_dims.index(d))
+        elif d in dim_map and dim_map[d] in target_dims:
+            new_order.append(target_dims.index(dim_map[d]))
+        else:
+            raise ValueError(f"could not find dim '{d}' in target.")
+    new_order = np.argsort(new_order)
+    return a.transpose(*[a.dims[i] for i in new_order])
+
+
+def dot_dataarray_csr(
+    a: xr.DataArray, b: scipy.sparse, bdims: list[str, str]
+) -> xr.DataArray:
+    """Multiply a DataArray and sparse array along one dimension."""
+
+    # figure out the common dimension along which to multiply
+    common_dim = set(a.dims) & set(bdims)
+    if len(common_dim) != 1:
+        raise ValueError("a and b must share a single common dimension!")
+    common_dim = common_dim.pop()
+
+    if a.sizes[common_dim] != b.shape[bdims.index(common_dim)]:
+        raise ValueError(
+            f"shape of common dimension '{common_dim}' does not match. "
+            f"a: {a.sizes[common_dim]} "
+            f"b: {b.shape[bdims.index(common_dim)]}."
+        )
+
+    # move common dimension in DataArray to the end and flatten others
+    aT = a.transpose(..., common_dim)
+    aT2D = aT.data.reshape(-1, aT.shape[-1])
+
+    if common_dim == bdims[0]:
+        tmp = (aT2D @ b).reshape(*aT.shape[:-1], b.shape[1])
+        new_dim = bdims[1]
+    else:
+        tmp = (aT2D @ b.T).reshape(*aT.shape[:-1], b.shape[0])
+        new_dim = bdims[0]
+
+    dims = list(aT.dims)[:-1] + [new_dim]
+
+    result = xr.DataArray(
+        tmp,
+        dims=dims,
+        coords=coords_from_other(aT, dims=dims),
+        attrs=aT.attrs
+    )
+
+    result = transpose_like(result, a, dim_map={new_dim : common_dim})
+
+    return result

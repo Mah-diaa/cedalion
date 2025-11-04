@@ -5,7 +5,6 @@ import pickle
 from gzip import GzipFile
 from pathlib import Path
 import pandas as pd
-from cedalion.imagereco.forward_model import TwoSurfaceHeadModel
 
 import pooch
 import xarray as xr
@@ -47,6 +46,9 @@ DATASETS = pooch.create(
         "sensitivity_nn22_resting_icbm152.nc": "sha256:4e8e8e16f167241835f4a8cad408dc7a0144401fe7fb3228248d2261d650c797",  # noqa:E501
 
         "nn22_resting_state.zip": "sha256:0394347af172d906fe33403e84303435af26d82fdcf1d36dad5c7b05beb82d88",  # noqa:E501
+        "Adot_ninjanirs_colin27.nc" : "sha256:3382e6bfd62b5e1213332cc74c88cc8af04a4fd5cebe7001ebc111cf9e9b2d00", # noqa:E501
+        "fluence_ninjanirs_colin27.h5" : "sha256:89d82c4f5a985f79777fceeffab9ef90365056ccda8ea4e29bc71c4d24fb0e0a", # noqa: E501
+
         "colin27_parcellation.zip": "sha256:70cb51cc587b7a7389050b854beede76327ed8b105fa12971584a7d1bb7fa080",  # noqa:E501
         "icbm152_parcellation.zip": "sha256:b69ffdb3ff2fe3d85a6d5c139e59147d05ca97127589c1e4c2a8d031850f0148",  # noqa:E501
 
@@ -103,16 +105,6 @@ def get_colin27_segmentation(downsampled=False):
     landmarks_ras_file = "landmarks.mrk.json"
 
     return basedir, mask_files, landmarks_ras_file
-
-
-def get_colin27_headmodel():
-    """Retrieves the Colin27 headmodel, based on :cite:t:`Holmes1998`."""
-    fnames = DATASETS.fetch("colin2SHM.zip", processor=pooch.Unzip())
-    directory = Path(fnames[0]).parent
-    head_model = TwoSurfaceHeadModel.load(directory)
-    head_model.brain.units = cedalion.units.mm
-    head_model.scalp.units = cedalion.units.mm
-    return head_model
 
 
 def get_colin27_parcel_file():

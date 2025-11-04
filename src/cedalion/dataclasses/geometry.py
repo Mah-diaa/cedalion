@@ -196,6 +196,13 @@ class TrimeshSurface(Surface):
 
         return result
 
+    def __repr__(self) -> str:
+        return (
+            f"TrimeshSurface(faces: {self.nfaces} vertices: {self.nvertices} "
+            f"crs: {self.crs} units: {self.units} "
+            f"vertex_coords: {list(self.vertex_coords.keys())})"
+        )
+
     @property
     def nvertices(self) -> int:
         return len(self.mesh.vertices)

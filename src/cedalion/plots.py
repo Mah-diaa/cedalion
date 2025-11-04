@@ -28,7 +28,7 @@ import cedalion.nirs
 import cedalion.typing as cdt
 from cedalion import Quantity
 from cedalion.dataclasses import PointType
-from cedalion.imagereco.forward_model import TwoSurfaceHeadModel
+#from cedalion.dot.head_model import TwoSurfaceHeadModel
 
 
 def plot_montage3D(amp: xr.DataArray, geo3d: xr.DataArray):
@@ -1111,7 +1111,7 @@ def scalp_plot_gif(
 
 def image_recon(
     X: cdt.NDTimeSeries,
-    head: TwoSurfaceHeadModel,
+    head: "cedalion.dot.TwoSurfaceHeadModel",
     cmap: str | matplotlib.colors.Colormap = 'seismic',
     clim=None,
     view_type: str ='hbo_brain',
@@ -1178,6 +1178,8 @@ def image_recon(
     cmap_obj = p.get_cmap(cmap, 1024)
     new_cmap_colors = np.vstack((cmap_obj(np.linspace(0, 1, 256))))
     custom_cmap = ListedColormap(new_cmap_colors)
+
+    X = X.pint.dequantify()
 
     # Separate the scalar data
     X_hbo_brain = X.sel(chromo='HbO')[X.is_brain.values]
@@ -1282,7 +1284,7 @@ def image_recon(
 
 def image_recon_view(
     X_ts: cdt.NDTimeSeries,
-    head: TwoSurfaceHeadModel,
+    head: "cedalion.dot.TwoSurfaceHeadModel",
     cmap: str | matplotlib.colors.Colormap = 'seismic',
     clim = None,
     view_type: str ='hbo_brain',
@@ -1436,7 +1438,7 @@ def image_recon_view(
 
 def image_recon_multi_view(
     X_ts: cdt.NDTimeSeries,
-    head: TwoSurfaceHeadModel,
+    head: "cedalion.dot.TwoSurfaceHeadModel",
     cmap: str | matplotlib.colors.Colormap = 'seismic',
     clim = None,
     view_type: str ='hbo_brain',

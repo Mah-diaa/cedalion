@@ -1,17 +1,15 @@
 """Utility functions for image reconstruction."""
 
-import xarray as xr
 import numpy as np
-import cedalion
-from cedalion import units
-import cedalion.dataclasses as cdc
-import cedalion.typing as cdt
-import cedalion.geometry.segmentation as segm
-from scipy.sparse import coo_array
 import scipy.stats
+import xarray as xr
+from scipy.sparse import coo_array
 
+import cedalion
+import cedalion.dataclasses as cdc
+import cedalion.geometry.segmentation as segm
+import cedalion.typing as cdt
 from cedalion import xrutils
-
 
 # FIXME right location?
 def map_segmentation_mask_to_surface(
@@ -81,10 +79,10 @@ def normal_hrf(t, t_peak, t_std, vmax):
 def create_mock_activation_below_point(
     head_model: "cedalion.imagereco.forward_model.TwoSurfaceHeadModel",
     point: cdt.LabeledPointCloud,
-    time_length: units.Quantity,
-    sampling_rate: units.Quantity,
-    spatial_size: units.Quantity,
-    vmax: units.Quantity,
+    time_length: cdt.QTime,
+    sampling_rate: cdt.QFrequency,
+    spatial_size: cdt.QLength,
+    vmax: float,
 ):
     """Create a mock activation below a point.
 
