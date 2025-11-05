@@ -210,7 +210,7 @@ def plot_surface(
 
 
     # Define landmark labels
-    landmark_labels = ['Nz', 'Iz', 'Cz', 'Lpa', 'Rpa']
+    landmark_labels = ['Nz', 'Iz', 'Cz', 'LPA', 'RPA']
     picked_points = []
     labels = []
     point_actors = []

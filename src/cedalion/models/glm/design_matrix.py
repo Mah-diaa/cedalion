@@ -86,6 +86,7 @@ class DesignMatrix:
         """
 
         channel_wise_regressors = self.channel_wise
+        spatial_dim = (set(ts.dims) - {"time", "chromo", "wavelength"}).pop()
 
         dim3_name = xrutils.other_dim(self.common, "time", "regressor")
 
@@ -110,7 +111,7 @@ class DesignMatrix:
             for dim3 in self.common[dim3_name].values:
                 dm = self.common.sel({dim3_name: dim3})
                 # group_y = ts.sel({dim3_name: dim3})
-                channels = ts.channel.values
+                channels = ts[spatial_dim].values
                 # yield dim3, group_y, dm
                 yield dim3, channels, dm
 
@@ -161,7 +162,7 @@ def _hash_channel_wise_regressor(regressor: xr.DataArray) -> list[int]:
     return [hash(tmp.isel(channel=i).values.data.tobytes()) for i in range(n_channel)]
 
 
-def hrf_regressors(
+def  hrf_regressors(
     ts: cdt.NDTimeSeries, stim: pd.DataFrame, basis_function: TemporalBasisFunction
 ) -> DesignMatrix:
     """Create regressors modelling the hemodynamic response to stimuli.
@@ -180,13 +181,14 @@ def hrf_regressors(
     # so that users can pass their own individual hrf function
 
     trial_types: np.ndarray = stim.trial_type.unique()
+    spatial_dim = (set(ts.dims) - {"time", "chromo", "wavelength"}).pop()
 
     basis = basis_function(ts)
 
     components = basis.component.values
 
     # could be "chromo" or "wavelength"
-    other_dim = xrutils.other_dim(ts, "channel", "time")
+    other_dim = xrutils.other_dim(ts, spatial_dim, "time")
 
     n_time = ts.sizes["time"]
     n_other = ts.sizes[other_dim]
@@ -269,7 +271,8 @@ def drift_regressors(ts: cdt.NDTimeSeries, drift_order) -> DesignMatrix:
     Returns:
         xr.DataArray: A DataArray containing the drift regressors.
     """
-    dim3 = xrutils.other_dim(ts, "channel", "time")
+    spatial_dim = (set(ts.dims) - {"time", "chromo", "wavelength"}).pop()
+    dim3 = xrutils.other_dim(ts, spatial_dim, "time")
     ndim3 = ts.sizes[dim3]
 
     nt = ts.sizes["time"]
@@ -305,8 +308,9 @@ def drift_legendre_regressors(ts : cdt.NDTimeSeries, order : int) -> DesignMatri
     Returns:
         xr.DataArray: A DataArray containing the drift regressors.
     """
+    spatial_dim = (set(ts.dims) - {"time", "chromo", "wavelength"}).pop()
 
-    dim3 = xrutils.other_dim(ts, "channel", "time")
+    dim3 = xrutils.other_dim(ts, spatial_dim, "time")
     ndim3 = ts.sizes[dim3]
 
     nt = ts.sizes["time"]
@@ -344,8 +348,9 @@ def drift_cosine_regressors(ts: cdt.NDTimeSeries, fmax: cdt.QFrequency) -> Desig
     Returns:
         xr.DataArray: A DataArray containing the drift regressors.
     """
+    spatial_dim = (set(ts.dims) - {"time", "chromo", "wavelength"}).pop()
 
-    dim3 = xrutils.other_dim(ts, "channel", "time")
+    dim3 = xrutils.other_dim(ts, spatial_dim, "time")
     ndim3 = ts.sizes[dim3]
 
     nt = ts.sizes["time"]

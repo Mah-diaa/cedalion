@@ -90,14 +90,14 @@ def fit(
     # FIXME: unit handling?
     # shoud the design matrix be dimensionless? -> thetas will have units
     ts = ts.pint.dequantify()
-
+    spatial_dim = (set(ts.dims) - {"time", "chromo", "wavelength"}).pop()
     dim3_name = xrutils.other_dim(design_matrix.common, "time", "regressor")
 
 
     reg_results = xr.DataArray(
-        np.empty((ts.sizes["channel"], ts.sizes[dim3_name]), dtype=object),
-        dims=("channel", dim3_name),
-        coords=xrutils.coords_from_other(ts.isel(time=0), dims=("channel", dim3_name))
+        np.empty((ts.sizes[spatial_dim], ts.sizes[dim3_name]), dtype=object),
+        dims=(spatial_dim, dim3_name),
+        coords=xrutils.coords_from_other(ts.isel(time=0), dims=(spatial_dim, dim3_name))
     )
 
     for (
@@ -105,8 +105,8 @@ def fit(
         group_channels,
         group_design_matrix,
     ) in design_matrix.iter_computational_groups(ts):
-        group_y = ts.sel({"channel": group_channels, dim3_name: dim3}).transpose(
-            "time", "channel"
+        group_y = ts.sel({spatial_dim: group_channels, dim3_name: dim3}).transpose(
+            "time", spatial_dim
         )
 
         # pass x as a DataFrame to statsmodel to make it aware of regressor names
@@ -115,12 +115,12 @@ def fit(
         )
 
         if(max_jobs==1):
-            for chan in tqdm(group_y.channel.values, disable=not verbose):
+            for chan in tqdm(group_y[spatial_dim].values, disable=not verbose):
                 result = _channel_fit(group_y.loc[:, chan], x, noise_model, ar_order)
                 reg_results.loc[chan, dim3] = result
         else:
             args_list=[]
-            for chan in group_y.channel.values:
+            for chan in group_y[spatial_dim].values:
                 args_list.append([group_y.loc[:, chan], x, noise_model, ar_order])
 
             with parallel_config(backend='threading', n_jobs=max_jobs):
@@ -131,7 +131,7 @@ def fit(
                     total=len(args_list)
                 )
 
-            for chan, result in zip(group_y.channel.values, batch_results):
+            for chan, result in zip(group_y[spatial_dim].values, batch_results):
                 reg_results.loc[chan, dim3] = result
 
     #try:
@@ -176,7 +176,7 @@ def predict(
     Returns:
         prediction (xr.DataArray): The predicted time series.
     """
-
+    spatial_dim = (set(ts.dims) - {"time", "chromo", "wavelength"}).pop()
     dim3_name = xrutils.other_dim(design_matrix.common, "time", "regressor")
 
     prediction = defaultdict(list)
@@ -187,11 +187,11 @@ def predict(
         group_design_matrix,
     ) in design_matrix.iter_computational_groups(ts):
         # (dim3, channel, regressor)
-        t = thetas.sel({"channel": group_channels, dim3_name: [dim3]})
+        t = thetas.sel({spatial_dim: group_channels, dim3_name: [dim3]})
         prediction[dim3].append(xr.dot(group_design_matrix, t, dim="regressor"))
 
     # concatenate channels
-    prediction = [xr.concat(v, dim="channel") for v in prediction.values()]
+    prediction = [xr.concat(v, dim=spatial_dim) for v in prediction.values()]
 
     # concatenate dim3
     prediction = xr.concat(prediction, dim=dim3_name)
