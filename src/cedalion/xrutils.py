@@ -390,3 +390,19 @@ def dot_dataarray_csr(
     result = transpose_like(result, a, dim_map={new_dim : common_dim})
 
     return result
+
+
+def check_units(array : xr.DataArray, dimension : str):
+    """Check the dimensionality of quantified and dequantified DataArrays."""
+
+    if array.pint.units is None:
+        if (units_str := array.attrs.get("units", None)) is None:
+            # fail or return False?
+            #raise ValueError("Array is not quantified and has no units in .attrs!")
+            return False
+        else:
+            units = pint.Unit(units_str)
+    else:
+        units = array.pint.units
+
+    return (1*units).check(dimension)

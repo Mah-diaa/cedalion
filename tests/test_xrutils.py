@@ -4,6 +4,7 @@ import pytest
 import xarray as xr
 from scipy.sparse import csr_matrix
 
+import cedalion
 import cedalion.xrutils as xrutils
 
 
@@ -118,3 +119,26 @@ def test_transpose_like():
                 assert d1 == old_dim
             else:
                 assert d2 == d1
+
+def test_check_units():
+    x_quant_time = xr.DataArray([1,2,3], dims="x").pint.quantify("ps")
+    x_dequant_time = x_quant_time.pint.dequantify()
+    x_quant_length = xr.DataArray([1,2,3], dims="x").pint.quantify("ly")
+    x_dequant_length = x_quant_length.pint.dequantify()
+    x_none = xr.DataArray([1,2,3], dims="x")
+
+    assert xrutils.check_units(x_quant_time, "[time]")
+    assert xrutils.check_units(x_dequant_time, "[time]")
+
+    assert not xrutils.check_units(x_dequant_time, "[volume]")
+    assert not xrutils.check_units(x_quant_time, "[volume]")
+
+    assert xrutils.check_units(x_quant_length, "[length]")
+    assert xrutils.check_units(x_dequant_length, "[length]")
+
+    assert not xrutils.check_units(x_dequant_length, "[volume]")
+    assert not xrutils.check_units(x_quant_length, "[volume]")
+
+
+    for dim in cedalion.units._dimensions.keys(): # ["[time]", "[length]", ...]
+        assert not xrutils.check_units(x_none, dim)

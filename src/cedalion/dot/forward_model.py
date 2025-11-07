@@ -839,3 +839,34 @@ def stack_flat_channel(array: xr.DataArray):
 def unstack_flat_channel(array: xr.DataArray):
     return xrutils.unstack(array, "flat_channel", ("wavelength", "channel"))
 
+
+def image_to_channel_space(
+    Adot: xr.DataArray, img: xr.DataArray, spectrum: str | None = None
+):
+    common_dim = set(Adot.dims) & set (img.dims)
+    assert len(common_dim) == 1
+    common_dim = next(iter(common_dim))
+    assert common_dim == "vertex" # FIXME generalize?
+
+    if xrutils.check_units(img, "[concentration]"):
+        if spectrum is None:
+            raise ValueError("You must specify 'spectrum' if img is a concentration.")
+
+        img = img.pint.quantify()
+
+        Adot_stacked = ForwardModel.compute_stacked_sensitivity(Adot, spectrum)
+        Adot_stacked = Adot_stacked.pint.quantify()
+        img_stacked = stack_flat_vertex(img)
+
+        return unstack_flat_channel(
+            xrutils.contract(
+                Adot_stacked, img_stacked, dim="flat_vertex"
+            )  # FIXME generalize?
+        )
+    elif xrutils.check_units(img, "[1/length]"):
+        Adot = Adot.pint.quantify()
+        img = img.pint.quantify()
+
+        xrutils.contract(Adot_stacked, img_stacked, dim=common_dim)
+    else:
+        raise ValueError("img must be a quantified concentration ")

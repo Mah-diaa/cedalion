@@ -829,6 +829,10 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
             img = xrutils.dot_dataarray_csr(
                 X, self._G[:n_kernels_brain, :], ["kernel", "vertex"]
             )
+            # FIXME even if only kernels on the brain are provided in X, G contains
+            # vertices of the scalp which we have to select away afterwards.
+            # It would be more efficient if these vertices would be cut from G.
+            img = img.sel(vertex=self._G_vertex_is_brain)
             img = img.assign_coords(
                 {"is_brain": ("vertex", np.ones(img.sizes["vertex"], dtype=bool))}
             )
@@ -1045,16 +1049,17 @@ class ImageRecon:
 
         if self.recon_mode == "conc":
             conc_img = self._get_image_conc(y)
+            conc_img = conc_img.pint.quantify("M").to("uM")
             return conc_img
 
         mua_img = self._get_image_mua(y)
+        mua_img = mua_img.pint.quantify("1/mm")
 
         if self.recon_mode == "mua":
             return mua_img
         elif self.recon_mode == "mua2conc":
-            return xrutils.contract(
-                self._mua2conc, mua_img / units.mm, dim=["wavelength"]
-            )
+            conc_img = xrutils.contract(self._mua2conc, mua_img, dim=["wavelength"])
+            return conc_img.pint.to("uM")
         else:
             raise ValueError()  # unreachable
 
@@ -1087,7 +1092,9 @@ class ImageRecon:
             if self.recon_mode == "mua":
                 return mua_img
             else:
-                return self._mua2conc**2 @ mua_img / units.mm**2
+                return xrutils.contract(
+                    self._mua2conc**2, mua_img / units.mm**2, "wavelength"
+                )
         else:
             raise ValueError()  # unreachable
 
@@ -1415,15 +1422,23 @@ class ImageRecon:
 
     def _get_image_conc(self, y: cdt.NDTimeSeries) -> cdt.NDTimeSeries:
         y = fwm.stack_flat_channel(y)
+        y = y.reset_index("flat_channel")
 
-        # Detect time dimension
-        #time_dim = self._get_time_dimension(y)
-        #has_time = time_dim is not None
-        #if has_time:
-        #    y = y.transpose('flat_channel', ...)
+        # make sure that ordering of channels is consistent
+        # y may contain less channels then W due to pruning
+        try:
+            sel_channels = [
+                i for i in self._W.flat_channel.values if i in y.flat_channel.values
+            ]
+            y = y.sel(flat_channel = sel_channels)
+            W = self._W.sel(flat_channel=sel_channels)
+        except KeyError:
+            raise ValueError(
+                "This time series contains channel(s) which is/are not in the "
+                "sensitivity matrix!"
+            )
 
-        #conc_img = self._W @ y
-        conc_img = xrutils.contract(self._W, y, "flat_channel")
+        conc_img = xrutils.contract(W, y, "flat_channel")
 
 
         if self.sbf is None:
@@ -1447,28 +1462,22 @@ class ImageRecon:
 
         #time_dim = self._get_time_dimension(y)
 
-        mua_img = xrutils.contract(self._W, y, dim="channel")
+        # make sure that ordering of channels is consistent
+        # y may contain less channels then W due to pruning
+        try:
+            sel_channels = [i for i in self._W.channel.values if i in y.channel.values]
+            y = y.sel(channel=sel_channels)
+            W = self._W.sel(channel=sel_channels)
+        except KeyError:
+            raise ValueError(
+                "This time series contains channel(s) which is/are not in the "
+                "sensitivity matrix!"
+            )
+
+        mua_img = xrutils.contract(W, y, dim="channel")
 
         if self.sbf is not None:
             mua_img = self.sbf.kernel_to_image_space_mua(mua_img)
-
-        """
-        mua_results = []
-        for w in y.wavelength:
-            W_w = self._W.sel(wavelength=w)
-            y_w = y.sel(wavelength=w)
-            X_w = W_w.values @ y_w.values
-            if self.sbf is not None:
-                X_w = self.sbf.kernel_to_image_space_mua(X_w)
-
-            mua_results.append(X_w)
-
-        # Combine wavelengths: stack along wavelength axis
-        mua_img = np.stack(mua_results, axis=0)  # (wavelength, vertex, [time])
-
-        # Create properly formatted DataArray
-        return self._create_mua_dataarray(mua_img, y, time_dim)
-        """
 
         return mua_img
 
