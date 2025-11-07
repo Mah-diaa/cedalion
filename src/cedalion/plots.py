@@ -1347,6 +1347,8 @@ def image_recon_view(
     - Alexander von Lühmann | vonluehmann@tu-berlin.de | 2025
     """
 
+    X_ts = X_ts.pint.dequantify()
+
     # Animated case (time dimension exists with more than one element):
     # check for frame indices
     if ("time" in X_ts.dims and X_ts.sizes["time"] > 1) or (
@@ -1497,6 +1499,7 @@ def image_recon_multi_view(
     - Alexander von Lühmann | vonluehmann@tu-berlin.de | 2025
     """
 
+    X_ts = X_ts.pint.dequantify()
 
     subplot_shape = (2, 3)
     # Define the subplot positions for each view

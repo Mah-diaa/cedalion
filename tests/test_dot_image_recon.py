@@ -37,10 +37,10 @@ def test_image_recon(Adot):
         coords={"is_brain": ("vertex", Adot.is_brain.values)},
     )
 
-    x_true[5:15] = 1.
+    x_true[5:15] = 1.0
 
     y = xrutils.contract(Adot, x_true, "vertex")
-    #y += rng.normal(0, 2, y.shape)
+    # y += rng.normal(0, 2, y.shape)
 
     recon = dot.ImageRecon(
         Adot,
@@ -53,4 +53,4 @@ def test_image_recon(Adot):
 
     x_reco = recon.reconstruct(y)
 
-    assert np.allclose(x_reco[0,:], x_true, atol=1e-4)
+    assert np.allclose(x_reco[0, :], x_true, atol=1e-4)

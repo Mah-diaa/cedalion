@@ -77,7 +77,7 @@ def normal_hrf(t, t_peak, t_std, vmax):
 
 
 def create_mock_activation_below_point(
-    head_model: "cedalion.imagereco.forward_model.TwoSurfaceHeadModel",
+    head_model: "cedalion.dot.TwoSurfaceHeadModel",
     point: cdt.LabeledPointCloud,
     time_length: cdt.QTime,
     sampling_rate: cdt.QFrequency,
@@ -87,13 +87,12 @@ def create_mock_activation_below_point(
     """Create a mock activation below a point.
 
     Args:
-        head_model (cedalion.imagereco.forward_model.TwoSurfaceHeadModel): The head
-            model.
-        point (cdt.LabeledPointCloud): The point below which to create the activation.
-        time_length (units.Quantity): The length of the activation.
-        sampling_rate (units.Quantity): The sampling rate.
-        spatial_size (units.Quantity): The spatial size of the activation.
-        vmax (units.Quantity): The maximum value of the activation.
+        head_model: The head model.
+        point: The point below which to create the activation.
+        time_length: The length of the activation.
+        sampling_rate: The sampling rate.
+        spatial_size: The spatial size of the activation.
+        vmax: The maximum value of the activation.
 
     Returns:
         xr.DataArray: The activation.

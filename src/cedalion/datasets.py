@@ -1,8 +1,6 @@
 """Cedalion datasets and utility functions."""
 
 import os.path
-import pickle
-from gzip import GzipFile
 from pathlib import Path
 import pandas as pd
 
@@ -205,15 +203,6 @@ def get_photogrammetry_example_scan():
     fname_snirf = [i for i in fnames if i.endswith(".snirf")][0]
     fname_montage = [i for i in fnames if i.endswith(".png")][0]
     return fname_scan, fname_snirf, fname_montage
-
-
-def get_imagereco_example_fluence() -> tuple[xr.DataArray, xr.DataArray]:
-    fname = DATASETS.fetch("image_reconstruction_fluence.pickle.gz")
-
-    with GzipFile(fname) as fin:
-        fluence_all, fluence_at_optodes = pickle.load(fin)
-
-    return fluence_all, fluence_at_optodes
 
 
 def get_precomputed_fluence(dataset: str, head_model: str) -> Path:

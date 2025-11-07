@@ -153,7 +153,7 @@ Widely used general functionality is part of the files on the top level (e.g. ni
 | **data** | Look up tables and other small datasets often required for ecexuting functions. |
 | **dataclasses** | Dataclass definitions that are used in Cedalion. Example: in xrschemas.py you can find that we work with xarray objects (see more detail in the next section). For time series data these have to have at least two dimensions: "time" and "channel".  |
 | **geometry** | Functions for geometric manipulations, e.g. for optode registration, building landmarks on a 3D head, head segmentation, etc. |
-| **imagereco** | Functions for DOT image reconstruction |
+| **dot** | Functions for DOT image reconstruction |
 | **io** | Functions for reading and writing data to and from Cedalion. This includes for instance fnirs data in snirf format, probe geometries or reading anatomies (e.g. segmentation masks). |
 | **models** | Functions for data modelling, for instance the General Linear Model (GLM).|
 | **sigdecomp** | Functions for signal decomposition methods that are not part of a standard python distribution, e.g. advanced ICA methods.|
