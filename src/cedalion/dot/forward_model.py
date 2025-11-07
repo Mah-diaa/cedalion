@@ -14,6 +14,7 @@ import os.path
 import warnings
 import sys
 from pathlib import Path
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -108,6 +109,19 @@ class ForwardModel:
         self.volume = self.volume.values.astype(np.uint8)
         self.unitinmm = self._get_unitinmm()
 
+    def _get_voxel_dimensions(self) -> pint.Quantity:
+        """Calculate the x,y and z voxel dimensions in scanner space.
+
+        Returns:
+            A quantified array [dx,dy,dz].
+        """
+
+        pts = cdc.build_labeled_points(
+            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], crs="ijk", units="1"
+        )
+        pts_ras = pts.points.apply_transform(self.head_model.t_ijk2ras)
+        return xrutils.norm(pts_ras[1:] - pts_ras[0], pts_ras.points.crs).data
+
 
     def _get_unitinmm(self):
         """Calculate length of volume grid cells.
@@ -116,10 +130,12 @@ class ForwardModel:
         relate to physical distances pmcx needs the 'unitinmm' parameter.
         """
 
-        pts = cdc.build_labeled_points([[0, 0, 0], [0, 0, 1]], crs="ijk", units="1")
-        pts_ras = pts.points.apply_transform(self.head_model.t_ijk2ras)
-        length = xrutils.norm(pts_ras[1] - pts_ras[0], pts_ras.points.crs)
-        return length.pint.magnitude.item()
+        # FIXME when scaling head models voxels may have different lengths in different
+        # dimensions. MCX assumes cubical voxels with dimension unitinmm.
+        # Report an edge length  that matches the voxel volume when cubed.
+        voxel_dims = self._get_voxel_dimensions().to("mm").magnitude
+        return np.prod(voxel_dims)**(1/3)
+
 
     def _get_fluence_from_mcx(self, i_optode: int, i_wl: int=0, **kwargs) -> np.ndarray:
         """Run MCX simulation to get fluence for one optode.
@@ -300,6 +316,13 @@ class ForwardModel:
             reconstruction."
             Communications in numerical methods in engineering 25.6 (2009): 711-732.
         """
+
+        if self._get_unitinmm() != 1.:
+            warn(
+                "The current NIRFASTer implementation assumes a voxel volume of 1mm^3, "
+                "but the voxel size of this head model is "
+                + f"{self._get_voxel_dimensions().to('mm').magnitude} mm."
+            )
 
         # FIXME
         src_path = os.path.abspath(
@@ -488,7 +511,8 @@ class ForwardModel:
         # However, this part of the computation and the fluence normalization in the
         # different forward models need further testing. Hence, for the moment and for
         # different voxel sizes a warning is issued.
-        Adot *= self._get_unitinmm()**3
+
+        Adot *= np.prod(self._get_voxel_dimensions().to("mm")).magnitude
 
         if self._get_unitinmm() != 1:
             warnings.warn("voxel size is not 1 mm^3. Check Adot normalization.")
