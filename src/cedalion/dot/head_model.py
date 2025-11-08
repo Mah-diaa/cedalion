@@ -506,7 +506,7 @@ class TwoSurfaceHeadModel:
     def align_and_snap_to_scalp(
         self,
         points: cdt.LabeledPointCloud,
-        mode: str = "trans_rot_isoscale",
+        mode: str = "general",
     ) -> cdt.LabeledPointCloud:
         """Align and snap optodes or points to the scalp surface.
 
