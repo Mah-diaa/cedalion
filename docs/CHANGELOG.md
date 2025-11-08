@@ -5,7 +5,16 @@
 ### Added
 - An example notebook for ICA source extraction was added, by [Jacqueline Behrendt](https://github.com/jackybehrendt12). 
 ([#112](https://github.com/ibs-lab/cedalion/pull/112))
+- Added `TwoSurfaceHeadmodel.scale_to_headsize` and `TwoSurfaceHeadmodel.scale_to_landmarks` to adjust the head model's size to the head circumferences or digitized landmarks, respectively.
+- The factory method `cedalion.dot.get_standard_headmodel` to construct the `TwoSurfaceHeadModel` of the standard Colin27 and ICBM-152 heads was added, by [Eike Middell](https://github.com/emiddell).
+- Added `cedalion.xrutils.dot_dataarray_csr` for matrix products between `xr.DataArray` 
+  and `scipy.sparse` arrays.
 ### Changed
+- The image reconstruction methods were refactored to offer more regularization methods     
+  (including spatial basis functions) as well as direct and indirect reconstructions and to provide a simpler interface to the user. All functions are now located under `cedalion.dot`, by [Laura Carlton](https://github.com/lauracarlton), [Alexander von Lühmann](https://github.com/avolu) and [Eike Middell](https://github.com/emiddell). ([#130](https://github.com/ibs-lab/cedalion/pull/86))
+- For the Colin27 and ICBM-152 heads the label for the coordinate reference system was   
+  changed from `'aligned'` to `'mni'`.
+
 - The ninja HD and UHD cap coordinates were changed from a right-handed to a left-handed
 coordinate system, by [Nils Harmening](https://github.com/harmening). ([#110](https://github.com/ibs-lab/cedalion/pull/110))
 - Changed the names of several motion correction algorithms from `motion_correct.motion_correct_X` 
