@@ -580,6 +580,7 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         self._G_kernel : np.ndarray = None
         self._G_kernel_is_brain: np.ndarray = None
         self._G_vertex_is_brain: np.ndarray = None
+        self._G_vertex_parcel: np.ndarray = None
 
         # compute _G
         self._compute_sensitivity_mask(Adot)
@@ -786,6 +787,14 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         self._G_vertex_is_brain = np.zeros(n_vertex, dtype=bool)
         self._G_vertex_is_brain[:head_model.brain.nvertices] = True
 
+        if "parcel" in head_model.brain.vertex_coords:
+            self._G_vertex_parcel = np.hstack(
+                (
+                    head_model.brain.vertex_coords["parcel"],
+                    [None] * head_model.scalp.nvertices,
+                )
+            )
+
 
     def _compute_H(self, Adot : xr.DataArray):
         """Compute the H matrix for spatial basis functions.
@@ -822,9 +831,14 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         n_kernels = len(self._G_kernel)
         n_kernels_brain = self._G_kernel_is_brain.sum()
 
+        coords = {}
+
         if X.sizes["kernel"] == n_kernels:
             img = xrutils.dot_dataarray_csr(X, self._G, ["kernel", "vertex"])
-            img = img.assign_coords({"is_brain" : ("vertex", self._G_vertex_is_brain)})
+
+            coords["is_brain"] = ("vertex", self._G_vertex_is_brain)
+            if self._G_vertex_parcel is not None:
+                coords["parcel"] = ("vertex", self._G_vertex_parcel)
         elif X.sizes["kernel"] == n_kernels_brain:  # brain_only == True
             img = xrutils.dot_dataarray_csr(
                 X, self._G[:n_kernels_brain, :], ["kernel", "vertex"]
@@ -833,9 +847,15 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
             # vertices of the scalp which we have to select away afterwards.
             # It would be more efficient if these vertices would be cut from G.
             img = img.sel(vertex=self._G_vertex_is_brain)
-            img = img.assign_coords(
-                {"is_brain": ("vertex", np.ones(img.sizes["vertex"], dtype=bool))}
-            )
+
+            coords["is_brain"] = ("vertex", np.ones(img.sizes["vertex"], dtype=bool))
+            if self._G_vertex_parcel is not None:
+                coords["parcel"] = (
+                    "vertex",
+                    self._G_vertex_parcel[self._G_vertex_is_brain],
+                )
+
+        img = img.assign_coords(coords)
 
         return img
 
@@ -858,16 +878,30 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         n_kernels = len(self._G_kernel)
         n_kernels_brain = self._G_kernel_is_brain.sum()
 
+        coords = {}
+
         if X.sizes["kernel"] == n_kernels:
             img = xrutils.dot_dataarray_csr(X, self._G, ["kernel", "vertex"])
-            img = img.assign_coords({"is_brain" : ("vertex", self._G_vertex_is_brain)})
+            coords["is_brain"] = ("vertex", self._G_vertex_is_brain)
+            if self._G_vertex_parcel is not None:
+                coords["parcel"] = ("vertex", self._G_vertex_parcel)
         elif X.sizes["kernel"] == n_kernels_brain:  # brain_only == True
             img = xrutils.dot_dataarray_csr(
                 X, self._G[:n_kernels_brain, :], ["kernel", "vertex"]
             )
-            img = img.assign_coords(
-                {"is_brain": ("vertex", np.ones(img.sizes["vertex"], dtype=bool))}
-            )
+            # FIXME even if only kernels on the brain are provided in X, G contains
+            # vertices of the scalp which we have to select away afterwards.
+            # It would be more efficient if these vertices would be cut from G.
+            img = img.sel(vertex=self._G_vertex_is_brain)
+
+            coords["is_brain"] = ("vertex", np.ones(img.sizes["vertex"], dtype=bool))
+            if self._G_vertex_parcel is not None:
+                coords["parcel"] = (
+                    "vertex",
+                    self._G_vertex_parcel[self._G_vertex_is_brain],
+                )
+
+        img = img.assign_coords(coords)
 
         return img
 
@@ -1049,7 +1083,7 @@ class ImageRecon:
 
         if self.recon_mode == "conc":
             conc_img = self._get_image_conc(y)
-            conc_img = conc_img.pint.quantify("M").to("uM")
+            conc_img = conc_img.pint.quantify("M").pint.to("uM")
             return conc_img
 
         mua_img = self._get_image_mua(y)
