@@ -10,6 +10,11 @@
 - Added `cedalion.xrutils.dot_dataarray_csr` for matrix products between `xr.DataArray` 
   and `scipy.sparse` arrays, by [Eike Middell](https://github.com/emiddell).
 ### Changed
+- The fiducial landmarks of the standard Colin27 and ICBM-152 heads changed. Using the landmark builder 10-10 coordinates were calculated for both heads. These are now 
+  available when head models are created with `get_standard_headmodel`. The example
+  notebook `48_headmodel_landmarks_verification.ipynb` documents the origin of all 
+  landmarksand quantitatively compares the output of the LandmarkBuilder to published
+  coordinates.  By [Eike Middell](https://github.com/emiddell).
 - Added the parameter `mode` to `TwoSurfaceHeadModel.align_and_snap_to_scalp` to switch
   between constrained affine transformations (translation, rotation, isotropic scaling)
   and unconstrained affine transformations (also anisotropic scaling, shearing and reflection). The default behaviour from `align_and_snap_to_scalp` was changed from
@@ -46,7 +51,7 @@ All dependencies have been updated to recent versions. Please rebuild the enviro
 - Spatial and measurement noise regularization options in image reconstruction,  by [David Boas](https://github.com/dboas). ([#86](https://github.com/ibs-lab/cedalion/pull/86))
 - Improved import of optode and electrode coordinates, by [Nils Harmening](https://github.com/harmening). ([#95](https://github.com/ibs-lab/cedalion/pull/95))
 - The interfaces for the fluence and sensitivity computations were changed to allow out-of-core computations, by [Eike Middell](https://github.com/emiddell).
-- Precomputed sensitivities for all example datasets, including the ninjaCap whole head probe, are availabe in cedalion.datasets, by [Eike Middell](https://github.com/emiddell).
+- Precomputed sensitivities for all example datasets, including the ninjaCap whole head probe, are availabe in cedalion.data, by [Eike Middell](https://github.com/emiddell).
 
 - Make all example notebooks run on Google Colab integration, by [Josef Cutler](https://github.com/jccutler). ([#96](https://github.com/ibs-lab/cedalion/pull/96))
 
