@@ -41,7 +41,7 @@ def ts():
 
 
 def test_int2od(ts):
-    od = cedalion.nirs.int2od(ts)
+    od = cedalion.nirs.cw.int2od(ts)
     assert od.pint.units == 1
     od = od.pint.dequantify()
     ch = "S1D1"
@@ -50,8 +50,8 @@ def test_int2od(ts):
 
 
 def test_od2int(ts):
-    od, baseline = cedalion.nirs.int2od(ts, return_baseline = True)
-    amp =  cedalion.nirs.od2int(od, baseline=baseline)
+    od, baseline = cedalion.nirs.cw.int2od(ts, return_baseline = True)
+    amp =  cedalion.nirs.cw.od2int(od, baseline=baseline)
     assert_allclose(ts, amp, rtol=1e-6, equal_nan=True)
 
 
@@ -66,9 +66,9 @@ def test_od2conc2od():
             [6, 6], dims="wavelength", coords={"wavelength": [wl1, wl2]}
         )
 
-        od1 = cedalion.nirs.int2od(rec["amp"])
-        conc = cedalion.nirs.od2conc(od1, rec.geo3d, dpf, "prahl")
-        od2 = cedalion.nirs.conc2od(conc, rec.geo3d, dpf, "prahl")
+        od1 = cedalion.nirs.cw.int2od(rec["amp"])
+        conc = cedalion.nirs.cw.od2conc(od1, rec.geo3d, dpf, "prahl")
+        od2 = cedalion.nirs.cw.conc2od(conc, rec.geo3d, dpf, "prahl")
 
     assert od1.pint.units == od2.pint.units
     od1 = od1.pint.dequantify()

@@ -12,7 +12,7 @@ from cedalion import units
 @pytest.fixture
 def rec():
     rec = cedalion.data.get_snirf_test_data()[0]
-    rec["od"] = cedalion.nirs.int2od(rec["amp"])
+    rec["od"] = cedalion.nirs.cw.int2od(rec["amp"])
 
     # differential pathlenght factors
     dpf = xr.DataArray(
@@ -21,7 +21,7 @@ def rec():
         coords={"wavelength": rec["amp"].wavelength},
     )
 
-    rec["conc"] = cedalion.nirs.od2conc(rec["od"], rec.geo3d, dpf, spectrum="prahl")
+    rec["conc"] = cedalion.nirs.cw.od2conc(rec["od"], rec.geo3d, dpf, spectrum="prahl")
 
     return rec
 

@@ -11,7 +11,7 @@ from cedalion import units
 def rec():
     rec = cedalion.data.get_snirf_test_data()[0]
     rec["amp"] = rec["amp"].pint.dequantify().pint.quantify(units.V)
-    rec["od"] = cedalion.nirs.int2od(rec["amp"])
+    rec["od"] = cedalion.nirs.cw.int2od(rec["amp"])
 
     # Add some synthetic spikes and baseline shifts
     artifacts = {"spike": synthetic_artifact.gen_spike}

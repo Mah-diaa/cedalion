@@ -77,13 +77,13 @@ def test_sd_dist(rec):
 
 
 def test_id_motion(rec):
-    rec["od"] = cedalion.nirs.int2od(rec["amp"])
+    rec["od"] = cedalion.nirs.cw.int2od(rec["amp"])
 
     _ = quality.id_motion(rec["od"])
 
 
 def test_id_motion_refine(rec):
-    rec["od"] = cedalion.nirs.int2od(rec["amp"])
+    rec["od"] = cedalion.nirs.cw.int2od(rec["amp"])
 
     ma_mask = quality.id_motion(rec["od"])
 

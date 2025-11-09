@@ -10,8 +10,9 @@
 - Added `cedalion.xrutils.dot_dataarray_csr` for matrix products between `xr.DataArray` 
   and `scipy.sparse` arrays, by [Eike Middell](https://github.com/emiddell).
 ### Changed
+- Split up the `.nirs` submodule into `.nirs.cw`, `.nirs.fd` and `.nirs.td`. 
 - Merged the submodules `cedalion.datasets` and `cedalion.data`. All functions to
-access example datasets are now available under `cedalion.data`. By [Eike Middell](https://github.com/emiddell).
+access example datasets are now available under `cedalion.data`. 
 - The fiducial landmarks of the standard Colin27 and ICBM-152 heads changed. Using the landmark builder 10-10 coordinates were calculated for both heads. These are now 
   available when head models are created with `get_standard_headmodel`. The example
   notebook `48_headmodel_landmarks_verification.ipynb` documents the origin of all 
@@ -23,8 +24,7 @@ access example datasets are now available under `cedalion.data`. By [Eike Middel
   constrained to unconstrained affine transformations. 
 - The image reconstruction methods were refactored to offer more regularization methods     
   (including spatial basis functions) as well as direct and indirect reconstructions and to provide a simpler interface to the user. All functions are now located under `cedalion.dot`. By [Laura Carlton](https://github.com/lauracarlton), [Alexander von Lühmann](https://github.com/avolu) and [Eike Middell](https://github.com/emiddell). ([#130](https://github.com/ibs-lab/cedalion/pull/86))
-- For the Colin27 and ICBM-152 heads the label for the coordinate reference system was   
-  changed from `'aligned'` to `'mni'`.
+- For the Colin27 and ICBM-152 heads the label for the coordinate reference system was changed from `'aligned'` to `'mni'`.
 - The ninja HD and UHD cap coordinates were changed from a right-handed to a left-handed
 coordinate system, by [Nils Harmening](https://github.com/harmening). ([#110](https://github.com/ibs-lab/cedalion/pull/110))
 - Changed the names of several motion correction algorithms from `motion_correct.motion_correct_X` 

@@ -23,9 +23,9 @@ import xarray as xr
 snirf_element = cedalion.data.get_fingertapping()
 amp = snirf_element[0].data[0]
 geo = snirf_element[0].geo3d
-od = cedalion.nirs.int2od(amp)
+od = cedalion.nirs.cw.int2od(amp)
 dpf = xr.DataArray([6, 6], dims="wavelength", coords={"wavelength" : amp.wavelength})
-conc = cedalion.nirs.beer_lambert(amp, geo, dpf)
+conc = cedalion.nirs.cw.beer_lambert(amp, geo, dpf)
 meas_list = snirf_element[0].measurement_lists[0]
 
 data = xr.Dataset(
