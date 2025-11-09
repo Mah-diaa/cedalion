@@ -7,7 +7,7 @@ from scipy.sparse import find
 import sys
 import xarray as xr
 
-import cedalion.datasets
+import cedalion.data
 import cedalion.dot.forward_model as fw
 import cedalion.dataclasses as cdc
 import cedalion.nirs
@@ -58,7 +58,7 @@ def test_TwoSurfaceHeadModel():
         SEG_DATADIR,
         mask_files,
         landmarks_file,
-    ) = cedalion.datasets.get_colin27_segmentation(downsampled=True)
+    ) = cedalion.data.get_colin27_segmentation(downsampled=True)
     head = fw.TwoSurfaceHeadModel.from_segmentation(
         segmentation_dir=SEG_DATADIR,
         mask_files=mask_files,

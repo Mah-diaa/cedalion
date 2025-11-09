@@ -43,7 +43,7 @@ I/O
    cedalion.io.forward_model
    cedalion.io.photogrammetry
    cedalion.io.probe_geometry
-   cedalion.datasets
+   cedalion.data
 
 
 Examples

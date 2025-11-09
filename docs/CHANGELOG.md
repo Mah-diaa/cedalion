@@ -10,6 +10,8 @@
 - Added `cedalion.xrutils.dot_dataarray_csr` for matrix products between `xr.DataArray` 
   and `scipy.sparse` arrays, by [Eike Middell](https://github.com/emiddell).
 ### Changed
+- Merged the submodules `cedalion.datasets` and `cedalion.data`. All functions to
+access example datasets are now available under `cedalion.data`. By [Eike Middell](https://github.com/emiddell).
 - The fiducial landmarks of the standard Colin27 and ICBM-152 heads changed. Using the landmark builder 10-10 coordinates were calculated for both heads. These are now 
   available when head models are created with `get_standard_headmodel`. The example
   notebook `48_headmodel_landmarks_verification.ipynb` documents the origin of all 

@@ -1,6 +1,6 @@
 import pytest
 
-import cedalion.datasets
+import cedalion.data
 import cedalion.nirs
 import cedalion.sigproc.motion_correct as mc
 import cedalion.sim.synthetic_artifact as synthetic_artifact
@@ -9,7 +9,7 @@ from cedalion import units
 
 @pytest.fixture
 def rec():
-    rec = cedalion.datasets.get_snirf_test_data()[0]
+    rec = cedalion.data.get_snirf_test_data()[0]
     rec["amp"] = rec["amp"].pint.dequantify().pint.quantify(units.V)
     rec["od"] = cedalion.nirs.int2od(rec["amp"])
 

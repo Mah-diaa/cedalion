@@ -17,10 +17,10 @@ It is smart to make yourself aware of five resources and concepts that build the
 # get example finger tapping dataset
 import cedalion
 import cedalion.nirs
-import cedalion.datasets as datasets
+import cedalion.data
 import xarray as xr
 
-snirf_element = datasets.get_fingertapping()
+snirf_element = cedalion.data.get_fingertapping()
 amp = snirf_element[0].data[0]
 geo = snirf_element[0].geo3d
 od = cedalion.nirs.int2od(amp)

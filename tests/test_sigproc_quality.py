@@ -4,14 +4,14 @@ import pytest
 from numpy.testing import assert_allclose
 
 import cedalion.dataclasses as cdc
-import cedalion.datasets
+import cedalion.data
 import cedalion.sigproc.quality as quality
 from cedalion import units
 
 
 @pytest.fixture
 def rec():
-    rec = cedalion.datasets.get_snirf_test_data()[0]
+    rec = cedalion.data.get_snirf_test_data()[0]
     rec["amp"] = rec["amp"].pint.dequantify().pint.quantify(units.V)
     return rec
 

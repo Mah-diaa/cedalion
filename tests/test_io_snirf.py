@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import cedalion.io
 import cedalion.io.snirf
-import cedalion.datasets
+import cedalion.data
 from tempfile import TemporaryDirectory
 
 # Edge cases in the handling of snirf files are often discovered in files provided
@@ -55,7 +55,7 @@ def test_add_number_to_name():
 
 
 def test_read_snirf_crs():
-    path = cedalion.datasets.get_fingertapping_snirf_path()
+    path = cedalion.data.get_fingertapping_snirf_path()
 
     rec = cedalion.io.read_snirf(path)[0]
     assert rec.geo3d.points.crs == "pos"

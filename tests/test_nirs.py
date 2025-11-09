@@ -5,7 +5,7 @@ import xarray as xr
 from numpy.testing import assert_allclose
 
 import cedalion.dataclasses as cdc
-import cedalion.datasets
+import cedalion.data
 import cedalion.nirs
 
 
@@ -56,7 +56,7 @@ def test_od2int(ts):
 
 
 def test_od2conc2od():
-    rec = cedalion.datasets.get_snirf_test_data()[0]
+    rec = cedalion.data.get_snirf_test_data()[0]
 
     for wl1,wl2 in [(760., 850.), (700, 900), (810, 820)]:
         amp = rec["amp"].copy()

@@ -14,7 +14,7 @@ from scipy.spatial import KDTree
 
 import cedalion
 import cedalion.dataclasses as cdc
-import cedalion.datasets
+import cedalion.data
 import cedalion.typing as cdt
 from cedalion import xrutils
 from cedalion.dot.utils import map_segmentation_mask_to_surface
@@ -666,9 +666,9 @@ def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
 
     if model == "colin27":
         SEG_DATADIR, mask_files, landmarks_file = (
-            cedalion.datasets.get_colin27_segmentation()
+            cedalion.data.get_colin27_segmentation()
         )
-        PARCEL_FILE = cedalion.datasets.get_colin27_parcel_file()
+        PARCEL_FILE = cedalion.data.get_colin27_parcel_file()
 
         head_ijk = TwoSurfaceHeadModel.from_surfaces(
             segmentation_dir=SEG_DATADIR,
@@ -688,10 +688,10 @@ def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
 
     elif model == "icbm152":
         SEG_DATADIR, mask_files, landmarks_file = (
-            cedalion.datasets.get_icbm152_segmentation()
+            cedalion.data.get_icbm152_segmentation()
         )
 
-        PARCEL_FILE = cedalion.datasets.get_icbm152_parcel_file()
+        PARCEL_FILE = cedalion.data.get_icbm152_parcel_file()
 
         head_ijk = TwoSurfaceHeadModel.from_surfaces(
             segmentation_dir=SEG_DATADIR,
