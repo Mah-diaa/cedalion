@@ -1,7 +1,6 @@
 """Module for constructing the 10-10-system on the scalp surface."""
 
 import warnings
-from typing import List, Optional
 
 import numpy as np
 import vtk
@@ -48,13 +47,27 @@ def _intersect_mesh_with_triangle(
     p0: np.ndarray,
     p1: np.ndarray,
     p2: np.ndarray,
-    select: Optional[List[float]] = None,
-):
+    select: list[float] | None = None,
+) -> (np.ndarray, np.ndarray, np.ndarray | None):
     """Find the line along the mesh through three points.
 
     Construct a line on a surface meshe from p0 through p1 to p2. To that end the
     mesh is intersected with a plane defined by the triangle (p0,p1,p2). Only points
     above the p0-p2-line are kept.
+
+    Args:
+        vtk_mesh: the mesh to intersect
+        p0: 3D point
+        p1: 3D point
+        p2: 3D point
+        select: array of percentage distances along the line that define the selected
+            points
+
+    Returns:
+        points: array of `points` along the constructed line
+        dists: an array of distances for each item in points
+        indices: if `select` is not None, this array contains the position of the
+            corresponding points in `points`.
     """
     p0p2 = p2 - p0
     origin = p0 + 0.5 * p0p2
@@ -135,7 +148,12 @@ class LandmarksBuilder1010:
 
         required_landmarks = ["Nz", "Iz", "LPA", "RPA"]
         for label in required_landmarks:
-            assert label in landmarks.label
+            assert label in landmarks.label, f"missing necessary fiducial {label}"
+
+        # ignore existing landmarks, keep only fiducials
+        landmarks = landmarks.sel(
+            label=landmarks.label.isin(["Nz", "Iz", "LPA", "RPA", "Cz"])
+        )
 
         self.landmarks_mm = landmarks.pint.to("mm").pint.dequantify()
 
@@ -145,8 +163,9 @@ class LandmarksBuilder1010:
 
     def _estimate_cranial_vertex_by_height(self):
         """Find the highest point of the skull."""
-        # FIXME: this only works for coordinate systems with z-axis oriented 
+        # FIXME: this only works for coordinate systems with z-axis oriented
         # superior like in RAS or ALS coordinate systems!
+        # determine z-direction through the cross-product of (RPA-LPA) and (Nz-Iz)
 
         vertices = vnp.vtk_to_numpy(self.vtk_mesh.GetPoints().GetData())
         highest_vertices = vertices[vertices[:, 2] == vertices[:, 2].max()]
@@ -194,14 +213,14 @@ class LandmarksBuilder1010:
         return cz2
 
     def _add_landmarks_along_line(
-        self, triangle_labels: List[str], labels: List[str], dists: List[float]
+        self, triangle_labels: list[str], labels: list[str], dists: list[float]
     ):
         """Add landmarks along a line defined by three landmarks.
 
         Args:
-            triangle_labels (List[str]): Labels of the three landmarks defining the line
-            labels (List[str]): Labels for the new landmarks
-            dists (List[float]): Distances along the line where the new landmarks should
+            triangle_labels: Labels of the three landmarks defining the line
+            labels: Labels for the new landmarks
+            dists: Distances along the line in percent where the new landmarks should
                 be placed.
         """
         assert len(triangle_labels) == 3
@@ -235,6 +254,7 @@ class LandmarksBuilder1010:
 
         self.landmarks_mm = xr.concat((self.landmarks_mm, tmp), dim="label")
 
+        # add all points to allow plotting the lines
         self.lines.append(points)
 
     def build(self):
@@ -244,7 +264,7 @@ class LandmarksBuilder1010:
         cz = self._estimate_cranial_vertex_from_lines()
 
         self.landmarks_mm = self.landmarks_mm.points.add("Cz", cz, PointType.LANDMARK)
-       
+
         for _ in range(5): # converge usually after 2-4 iterations
             self._add_landmarks_along_line(["LPA", "Cz", "RPA"], ["Cz"], [0.5])
             self._add_landmarks_along_line(["Nz", "Cz", "Iz"], ["Cz"], [0.5])

@@ -18,7 +18,6 @@ import cedalion.datasets
 import cedalion.typing as cdt
 from cedalion import xrutils
 from cedalion.dot.utils import map_segmentation_mask_to_surface
-from cedalion.geometry.landmarks import LandmarksBuilder1010
 from cedalion.geometry.ellipsoid import get_landmarks_for_headsize
 from cedalion.geometry.registration import (
     register_trans_rot_isoscale,
@@ -686,11 +685,6 @@ def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
         head_ijk.t_ijk2ras = head_ijk.t_ijk2ras.rename({"aligned" : "mni"})
         head_ijk.t_ras2ijk = head_ijk.t_ras2ijk.rename({"aligned" : "mni"})
 
-        # FIXME precompute landmark builder
-        head_ras = head_ijk.apply_transform(head_ijk.t_ijk2ras)
-        builder = LandmarksBuilder1010(head_ras.scalp, head_ras.landmarks)
-        head_ras.landmarks = builder.build()
-        head_ijk = head_ras.apply_transform(head_ras.t_ras2ijk)
 
     elif model == "icbm152":
         SEG_DATADIR, mask_files, landmarks_file = (
@@ -714,11 +708,6 @@ def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
         head_ijk.t_ijk2ras = head_ijk.t_ijk2ras.rename({"aligned" : "mni"})
         head_ijk.t_ras2ijk = head_ijk.t_ras2ijk.rename({"aligned" : "mni"})
 
-        # FIXME precompute landmark builder
-        head_ras = head_ijk.apply_transform(head_ijk.t_ijk2ras)
-        builder = LandmarksBuilder1010(head_ras.scalp, head_ras.landmarks)
-        head_ras.landmarks = builder.build()
-        head_ijk = head_ras.apply_transform(head_ras.t_ras2ijk)
     else:
         raise ValueError(
             "Unknown head model. Available models are: " + ", ".join(AVAILABLE_MODELS)

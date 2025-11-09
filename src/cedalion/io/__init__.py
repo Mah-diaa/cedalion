@@ -5,6 +5,7 @@ from .probe_geometry import (
     read_einstar_obj,
     load_tsv,
     export_to_tsv,
+    read_fieldtrip_elc,
 )
 from .anatomy import read_segmentation_masks, read_parcellations
 from .photogrammetry import read_photogrammetry_einstar, read_einstar, opt_fid_to_xr

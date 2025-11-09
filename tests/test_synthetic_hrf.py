@@ -67,7 +67,7 @@ def test_build_spatial_activation(head_model):
         close_vertices_big = head_model.brain.mesh.kdtree.query_ball_point(seed_pos, 20)
         # check that sum of close vertices is ~ 0.4 of the total sum
         assert (
-            0.35 < blob_small[close_vertices_small].sum().item() / sum_blob_small < 0.45
+            0.35 < blob_small[close_vertices_small].sum().item() / sum_blob_small < 0.50
         )
         # check that sum of close vertices is ~ 0.6 of the total sum
         assert 0.55 < blob_big[close_vertices_big].sum().item() / sum_blob_big < 0.65

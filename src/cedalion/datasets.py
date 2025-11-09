@@ -2,12 +2,14 @@
 
 import os.path
 from pathlib import Path
-import pandas as pd
 
+import pandas as pd
 import pooch
 import xarray as xr
 
+import cedalion
 import cedalion.dataclasses as cdc
+import cedalion.typing as cdt
 import cedalion.io
 from cedalion.io.forward_model import load_Adot
 
@@ -15,17 +17,18 @@ DATASETS = pooch.create(
     path=pooch.os_cache("cedalion"),
     base_url="https://doc.ibs.tu-berlin.de/cedalion/datasets/{version}/",
     env="CEDALION_DATA_DIR",
-    version="v25.1.0",
+    version=cedalion.__version__,
+    version_dev="dev",
     registry={
         "mne_nirsport2_raw.snirf": "sha256:12e5fabe64ecc7ef4b83f6bcd77abb41f5480d5f17a2b1aae0e2ad0406670944",  # noqa: E501
-        "colin27_segmentation.zip": "sha256:ad02dbd9582033d3c6f712761c2a79228e4bf30c8539f23f3280b8c4c7f9ace1",  # noqa: E501
+        "colin27_segmentation.zip": "sha256:783eeaf75a64aff27c2c07d4e6a8e9c6d5df66886f1b5696fd3f10a402f30d29",  # noqa: E501
         "colin27_segmentation_downsampled_3x3x3.zip": "sha256:ab98b6bae3ef76be6110dc544917f4f2f7ef7233ac697d9cf8bb4a395e81b6cd",  # noqa: E501
         "fingertapping.zip": "sha256:f2253cca6eef8221d536da54b74d8556b28be93df9143ea53652fdc3bc011875",  # noqa: E501
         "fingertappingDOT.zip": "sha256:03e620479bd48aea8457050b7ce42e0c73ef5448296272448b54cee0e883853e",  # noqa: E501
         "multisubject-fingertapping.zip": "sha256:9949c46ed676e52c385b4c09e3a732f6e742bf745253f4b4208ba678f9a0709b",  # noqa: E501
         "photogrammetry_example_scan.zip": "sha256:f4e4beb32a8217ba9f821edd8b5917a79ee88805a75a84a2aea9fac7b38ccbab",  # noqa: E501
         "colin2SHM.zip": "sha256:7568452d38d80bab91eb4b99c4dd85f3302243ecf9d5cf55afe629502e9d9960",  # noqa: E501
-        "ICBM152_2020.zip": "sha256:8dda23aa1f4592d50ba8528bb4ef7124c6593872bddeb9cbd510e7b1891568f3",  # noqa: E501
+        "ICBM152_2020.zip": "sha256:43e2250288830ca3b0ef6da73f62afcc9233e2fb783498645a36f4f8972106fe",  # noqa: E501
 
         "fluence_fingertapping_colin27.h5": "sha256:48befc2297378230ec69411f25dc850956958915e6c3060c3eb18354f186ef29",  # noqa:E501
         "fluence_fingertapping_icbm152.h5": "sha256:39e4a09ab84461b421f28705f52a9e201473e17ac44798e973ab68ad2838069e",  # noqa:E501
@@ -51,7 +54,12 @@ DATASETS = pooch.create(
         "icbm152_parcellation.zip": "sha256:b69ffdb3ff2fe3d85a6d5c139e59147d05ca97127589c1e4c2a8d031850f0148",  # noqa:E501
 
         "snirf2bids_example_dataset.zip" : "f14508e332c7d259c13b9717ac3c490ab2cabfd7b30fdf97b347d5ba59b783d1", # noqa:E501
+
+        "fieldtrip_standard1005.elc" : "sha256:1ee59197946d62de872db2ac7f2243a596662c231427366f6dc5d84ed237f853", # noqa:E501
     },
+    urls={
+        "fieldtrip_standard1005.elc" : "https://raw.githubusercontent.com/fieldtrip/fieldtrip/refs/heads/master/template/electrode/standard_1005.elc"
+    }
 )
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -279,3 +287,8 @@ def get_snirf2bids_example_dataset() -> tuple[Path, Path]:
     dataset_dir = mapping_file.parent
 
     return dataset_dir, mapping_file
+
+
+def get_fieldtrip_colin27_landmarks() -> cdt.LabeledPointCloud:
+    fname = DATASETS.fetch("fieldtrip_standard1005.elc")
+    return cedalion.io.read_fieldtrip_elc(fname)
