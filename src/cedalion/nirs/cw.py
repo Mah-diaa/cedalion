@@ -62,7 +62,7 @@ def od2int(od: cdt.NDTimeSeries, baseline: cdt.NDTimeSeries):
 
 def od2conc(
     od: cdt.NDTimeSeries,
-    geo3d: cdt.LabeledPointCloud,
+    geo3d: cdt.LabeledPoints,
     dpf: xr.DataArray,
     spectrum: str = "prahl",
 ):
@@ -106,7 +106,7 @@ def od2conc(
 
 def conc2od(
     conc: cdt.NDTimeSeries,
-    geo3d: cdt.LabeledPointCloud,
+    geo3d: cdt.LabeledPoints,
     dpf: xr.DataArray,
     spectrum: str = "prahl",
 ):
@@ -148,7 +148,7 @@ def conc2od(
 
 def beer_lambert(
     amplitudes: cdt.NDTimeSeries,
-    geo3d: cdt.LabeledPointCloud,
+    geo3d: cdt.LabeledPoints,
     dpf: xr.DataArray,
     spectrum: str = "prahl",
 ):

@@ -549,14 +549,14 @@ def _regressors_from_selected_short_channels(
 
 
 def closest_short_channel_regressor(
-    ts_long: cdt.NDTimeSeries, ts_short: cdt.NDTimeSeries, geo3d: cdt.LabeledPointCloud
+    ts_long: cdt.NDTimeSeries, ts_short: cdt.NDTimeSeries, geo3d: cdt.LabeledPoints
 ):
     """Create channel-wise regressors using the closest nearby short channel.
 
     Args:
         ts_long (NDTimeSeries): Time series of long channels
         ts_short (NDTimeSeries): Time series of short channels
-        geo3d (LabeledPointCloud): Probe geometry
+        geo3d (LabeledPoints): Probe geometry
 
     Returns:
         regressors (xr.DataArray): Channel-wise regressor

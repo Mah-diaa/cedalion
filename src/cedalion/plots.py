@@ -285,14 +285,14 @@ def plot_surface(
 
 def plot_labeled_points(
     plotter: pv.Plotter,
-    points: cdt.LabeledPointCloud,
-    color: pv.ColorLike = None,
+    points: cdt.LabeledPoints,
+    color: pv.ColorLike | None = None,
     show_labels: bool = False,
     ppoints: bool = None,
     labels: list[str] | None = None,
 ):
     #used in selecting optode centers in Photogrammetry example.
-    """Plots a labeled point cloud with optional interaction for picking points.
+    """Plots `LabeledPoints` with optional interaction for picking points.
 
         This function visualizes a point cloud where each point can have a label.
         Points can be interactively picked if enabled. Picked point is indicated by
@@ -371,7 +371,7 @@ def plot_labeled_points(
 
 def plot_vector_field(
     plotter: pv.Plotter,
-    points: cdt.LabeledPointCloud,
+    points: cdt.LabeledPoints,
     vectors: xr.DataArray,
     ppoints = None
 ):
@@ -380,7 +380,7 @@ def plot_vector_field(
     Args:
         plotter (pv.Plotter): A PyVista plotter instance used for rendering the vector
             field.
-        points (cdt.LabeledPointCloud): A labeled point cloud data structure containing
+        points (cdt.LabeledPoints): A labeled point cloud data structure containing
             point coordinates.
         vectors (xr.DataArray): A data array containing the vector field.
         ppoints (list, optional): A list to store indices of picked points, enables
@@ -423,7 +423,7 @@ class OptodeSelector:
 
     Attributes:
         surface (cdc.Surface): The surface of a head for normals.
-        points (cdt.LabeledPointCloud): The point cloud data containing point
+        points (cdt.LabeledPoints): The point cloud data containing point
             coordinates.
         normals (xr.DataArray): Normal vectors to the points.
         plotter (pv.Plotter): A PyVista plotter instance for rendering the point cloud.
@@ -657,6 +657,7 @@ def plot_stim_markers(
 
         ax.add_patch(rect)
 
+
 def plot_segments(
     ax,
     segments: list[tuple[float, float]],
@@ -688,7 +689,7 @@ def plot_segments(
 
 def scalp_plot(
     ts: cdt.NDTimeSeries,
-    geo3d: cdt.LabeledPointCloud,
+    geo3d: cdt.LabeledPoints,
     metric: xr.DataArray | ArrayLike,
     ax,
     title: str | None = None,
@@ -713,7 +714,7 @@ def scalp_plot(
 
     Args:
         ts: a NDTimeSeries to provide channel definitions
-        geo3d: a LabeledPointCloud to provide the probe geometry
+        geo3d: a LabeledPoints to provide the probe geometry
         metric ((:class:`DataArray`, (channel,) | ArrayLike)): the scalar metric to be
             plotted for each channel. If provided as a DataArray it needs a channel
             dimension. If provided as a plain array or list it must have the same
@@ -920,7 +921,7 @@ def scalp_plot(
 
 def brain_plot(
     ts: cdt.NDTimeSeries,
-    geo3d: cdt.LabeledPointCloud,
+    geo3d: cdt.LabeledPoints,
     metric: xr.DataArray | ArrayLike,
     brain_surface: cdc.TrimeshSurface,
     ax,
@@ -997,7 +998,7 @@ def brain_plot(
 
 def scalp_plot_gif(
         data_ts: cdt.NDTimeSeries,
-        geo3d: cdt.LabeledPointCloud,
+        geo3d: cdt.LabeledPoints,
         filename: str,
         time_range: tuple = None,
         cmap: str | matplotlib.colors.Colormap = 'seismic',
@@ -1013,8 +1014,8 @@ def scalp_plot_gif(
         data_ts : xarray.DataArray
             A 2D DataArray with dimensions (channel, time). Must include coordinate
             labels for 'source' and 'detector' in the 'channel' dimension.
-        geo3d : cedalion.core.LabeledPointCloud
-            3D geometry defining optode locations for projecting onto the scalp surface.
+        geo3d : 3D geometry defining optode locations for projecting onto the scalp
+            surface.
         filename : str
             Full path to the output GIF file without file extension.
         time_range: tuple, optional
@@ -1294,7 +1295,7 @@ def image_recon_view(
     SAVE: bool = False,
     time_range: tuple = None,
     fps: int = 6,
-    geo3d_plot: cdt.LabeledPointCloud = None,
+    geo3d_plot: cdt.LabeledPoints | None = None,
     wdw_size: tuple = (1024, 768)
 ):
     """Generate a single-view visualization of head activity.
@@ -1334,8 +1335,8 @@ def image_recon_view(
            animation.
         fps: int, default 6
             Frames per second for the GIF.
-        geo3d_plot: cdt.LabeledPointCloud, optional
-            A 3D point cloud for plotting labeled points (e.g. optodes) on the mesh.
+        geo3d_plot: cdt.LabeledPoints, optional
+            For plotting labeled points (e.g. optodes) on the mesh.
         wdw_size: tuple, default (1024, 768)
             The window size for the plotter (the plot resolution)
 
@@ -1449,7 +1450,7 @@ def image_recon_multi_view(
     SAVE: bool = True,
     time_range: tuple = None,
     fps: int = 6,
-    geo3d_plot: cdt.LabeledPointCloud = None,
+    geo3d_plot: cdt.LabeledPoints | None = None,
     wdw_size: tuple = (1024, 768)
 ):
     """Generate a multi-view (2×3 grid) vis. of head activity across different views.
@@ -1486,8 +1487,8 @@ def image_recon_multi_view(
            animation.
         fps: int, default 6
             Frames per second for the GIF.
-        geo3d_plot: cdt.LabeledPointCloud, optional
-            A 3D point cloud for plotting labeled points (e.g. optodes) on the mesh.
+        geo3d_plot: cdt.LabeledPoints, optional
+            For plotting labeled points (e.g. optodes) on the mesh.
         wdw_size: tuple, default (1024, 768)
             The window size for the plotter (the plot resolution)
 

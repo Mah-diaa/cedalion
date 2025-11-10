@@ -7,7 +7,7 @@ import cedalion.dataclasses as cdc
 @cdc.validate_schemas
 def get_landmarks_for_headsize(
     circumference: cdt.QLength, nz_cz_iz: cdt.QLength, lpa_cz_rpa: cdt.QLength
-) -> cdt.LabeledPointCloud:
+) -> cdt.LabeledPoints:
     def ellipse_1020_costfunc(
         params: np.ndarray,
         circumference: float,

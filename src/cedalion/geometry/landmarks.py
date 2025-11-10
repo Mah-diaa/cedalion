@@ -16,7 +16,7 @@ from cedalion.dataclasses import (
     validate_schemas,
     PointType,
 )
-from cedalion.typing import LabeledPointCloud
+from cedalion.typing import LabeledPoints
 
 
 def _sort_line_points(start_point: np.ndarray, points: np.ndarray):
@@ -128,18 +128,18 @@ class LandmarksBuilder1010:
 
     Attributes:
         scalp_surface (Surface): a triangle-mesh representing the scalp
-        landmarks_mm (LabeledPointCloud): positions of all 10-10 landmarks in mm
+        landmarks_mm (LabeledPoints): positions of all 10-10 landmarks in mm
         vtk_mesh (vtk.vtkPolyData): the scalp surface as a VTK mesh
         lines (List[np.ndarray]): points along the lines connecting the landmarks
     """
 
     @validate_schemas
-    def __init__(self, scalp_surface: Surface, landmarks: LabeledPointCloud):
+    def __init__(self, scalp_surface: Surface, landmarks: LabeledPoints):
         """Initialize the LandmarksBuilder1010.
 
         Args:
             scalp_surface (Surface): a triangle-mesh representing the scalp
-            landmarks (LabeledPointCloud): positions of "Nz", "Iz", "LPA", "RPA"
+            landmarks (LabeledPoints): positions of "Nz", "Iz", "LPA", "RPA"
         """
         if isinstance(scalp_surface, TrimeshSurface):
             scalp_surface = VTKSurface.from_trimeshsurface(scalp_surface)

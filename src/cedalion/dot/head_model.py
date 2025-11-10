@@ -44,7 +44,7 @@ class TwoSurfaceHeadModel:
             Surface of the brain.
         scalp : cdc.Surface
             Surface of the scalp.
-        landmarks : cdt.LabeledPointCloud
+        landmarks : cdt.LabeledPoints
             Anatomical landmarks in RAS space.
         t_ijk2ras : cdt.AffineTransform
             Affine transformation from ijk to RAS space.
@@ -75,7 +75,7 @@ class TwoSurfaceHeadModel:
     segmentation_masks: xr.DataArray
     brain: cdc.Surface
     scalp: cdc.Surface
-    landmarks: cdt.LabeledPointCloud
+    landmarks: cdt.LabeledPoints
     t_ijk2ras: cdt.AffineTransform
     t_ras2ijk: cdt.AffineTransform
     voxel_to_vertex_brain: scipy.sparse.spmatrix
@@ -504,20 +504,20 @@ class TwoSurfaceHeadModel:
     @cdc.validate_schemas
     def align_and_snap_to_scalp(
         self,
-        points: cdt.LabeledPointCloud,
+        points: cdt.LabeledPoints,
         mode: str = "general",
-    ) -> cdt.LabeledPointCloud:
+    ) -> cdt.LabeledPoints:
         """Align and snap optodes or points to the scalp surface.
 
         Args:
-            points (cdt.LabeledPointCloud): Points to be aligned and snapped to the
+            points (cdt.LabeledPoints): Points to be aligned and snapped to the
                 scalp surface.
             mode: method to derive the affine transform. Could be either
                 'trans_rot_isoscale' or 'general'. See cedalion.geometry.registraion
                 for details.
 
         Returns:
-            cdt.LabeledPointCloud: Points aligned and snapped to the scalp surface.
+            cdt.LabeledPoints: Points aligned and snapped to the scalp surface.
         """
 
         assert self.landmarks is not None, (
@@ -538,16 +538,16 @@ class TwoSurfaceHeadModel:
     # FIXME then maybe this should also not be in this class
     @cdc.validate_schemas
     def snap_to_scalp_voxels(
-        self, points: cdt.LabeledPointCloud
-    ) -> cdt.LabeledPointCloud:
+        self, points: cdt.LabeledPoints
+    ) -> cdt.LabeledPoints:
         """Snap optodes or points to the closest scalp voxel.
 
         Args:
-            points (cdt.LabeledPointCloud): Points to be snapped to the closest scalp
+            points (cdt.LabeledPoints): Points to be snapped to the closest scalp
                 voxel.
 
         Returns:
-            cdt.LabeledPointCloud: Points aligned and snapped to the closest scalp
+            cdt.LabeledPoints: Points aligned and snapped to the closest scalp
                 voxel.
         """
         # Align to scalp surface
@@ -615,7 +615,7 @@ class TwoSurfaceHeadModel:
 
     def scale_to_landmarks(
         self,
-        target_landmarks : cdt.LabeledPointCloud
+        target_landmarks : cdt.LabeledPoints
     ) -> "TwoSurfaceHeadModel":
         if self.crs == "ijk":
             landmarks_ras = self.landmarks.points.apply_transform(self.t_ijk2ras)

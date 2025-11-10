@@ -590,14 +590,14 @@ def mean_amp(amplitudes: cdt.NDTimeSeries, amp_range: tuple[Quantity, Quantity])
 @cdc.validate_schemas
 def sd_dist(
     amplitudes: cdt.NDTimeSeries,
-    geo3D: cdt.LabeledPointCloud,
+    geo3D: cdt.LabeledPoints,
     sd_range: tuple[Quantity, Quantity] = (0 * units.cm, 4.5 * units.cm),
 ):
     """Calculate source-detector separations and mask channels outside a distance range.
 
     Args:
         amplitudes (:class:`NDTimeSeries`, (channel, *)): input time series
-        geo3D (:class:`LabeledPointCloud`): 3D optode coordinates
+        geo3D (:class:`LabeledPoints`): 3D optode coordinates
         sd_range: if source-detector separation < sd_range[0] or > sd_range[1]
              then it is excluded as an active channelin sd_mask
 

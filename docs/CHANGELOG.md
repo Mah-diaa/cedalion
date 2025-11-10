@@ -10,6 +10,7 @@
 - Added `cedalion.xrutils.dot_dataarray_csr` for matrix products between `xr.DataArray` 
   and `scipy.sparse` arrays, by [Eike Middell](https://github.com/emiddell).
 ### Changed
+- Renamed `LabeledPointCloud` to `LabeledPoints`.
 - Split up the `.nirs` submodule into `.nirs.cw`, `.nirs.fd` and `.nirs.td`. 
 - Merged the submodules `cedalion.datasets` and `cedalion.data`. All functions to
 access example datasets are now available under `cedalion.data`. 

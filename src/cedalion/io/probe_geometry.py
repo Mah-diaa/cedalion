@@ -275,7 +275,7 @@ def read_einstar_obj(fname: str) -> TrimeshSurface:
     return TrimeshSurface(mesh, crs="digitized", units=cedalion.units.mm)
 
 
-def read_fieldtrip_elc(fname : Path | str) -> cdt.LabeledPointCloud:
+def read_fieldtrip_elc(fname : Path | str) -> cdt.LabeledPoints:
     section = "header"
 
     crs : str = None

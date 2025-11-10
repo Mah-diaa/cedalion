@@ -45,7 +45,7 @@ class ForwardModel:
     Args:
     head_model (TwoSurfaceHeadModel): Head model containing voxel projections to brain
         and scalp surfaces.
-    optode_pos (cdt.LabeledPointCloud): Optode positions.
+    optode_pos (cdt.LabeledPoints): Optode positions.
     optode_dir (xr.DataArray): Optode orientations (directions of light beams).
     tissue_properties (xr.DataArray): Tissue properties for each tissue type.
     volume (xr.DataArray): Voxelated head volume from segmentation masks.
@@ -63,7 +63,7 @@ class ForwardModel:
     def __init__(
         self,
         head_model: TwoSurfaceHeadModel,
-        geo3d: cdt.LabeledPointCloud,
+        geo3d: cdt.LabeledPoints,
         measurement_list: pd.DataFrame,
     ):
         """Constructor for the forward model.
@@ -71,7 +71,7 @@ class ForwardModel:
         Args:
             head_model (TwoSurfaceHeadModel): Head model containing voxel projections to
                 brain and scalp surfaces.
-            geo3d (cdt.LabeledPointCloud): Optode positions and directions.
+            geo3d (cdt.LabeledPoints): Optode positions and directions.
             measurement_list (pd.DataFrame): List of measurements of experiment with
                 source, detector, channel and wavelength.
         """

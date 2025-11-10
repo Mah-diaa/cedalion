@@ -80,7 +80,7 @@ def get_extinction_coefficients(spectrum: str, wavelengths: ArrayLike):
         raise ValueError(f"unsupported spectrum '{spectrum}'")
 
 
-def channel_distances(amplitudes: cdt.NDTimeSeries, geo3d: cdt.LabeledPointCloud):
+def channel_distances(amplitudes: cdt.NDTimeSeries, geo3d: cdt.LabeledPoints):
     """Calculate distances between channels.
 
     Args:
@@ -107,14 +107,14 @@ def channel_distances(amplitudes: cdt.NDTimeSeries, geo3d: cdt.LabeledPointCloud
 
 def split_long_short_channels(
     ts: cdt.NDTimeSeries,
-    geo3d: cdt.LabeledPointCloud,
+    geo3d: cdt.LabeledPoints,
     distance_threshold: cdt.QLength = 1.5 * cedalion.units.cm,
 ):
     """Split a time series into two based on channel distances.
 
     Args:
         ts (cdt.NDTimeSeries) : Time series to split.
-        geo3d (cdt.LabeledPointCloud) : 3D coordinates of the channels.
+        geo3d (cdt.LabeledPoints) : 3D coordinates of the optodes.
         distance_threshold (Quantity) : Distance threshold for splitting the channels.
 
     Returns:

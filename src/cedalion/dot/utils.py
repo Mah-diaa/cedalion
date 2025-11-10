@@ -78,7 +78,7 @@ def normal_hrf(t, t_peak, t_std, vmax):
 
 def create_mock_activation_below_point(
     head_model: "cedalion.dot.TwoSurfaceHeadModel",
-    point: cdt.LabeledPointCloud,
+    point: cdt.LabeledPoints,
     time_length: cdt.QTime,
     sampling_rate: cdt.QFrequency,
     spatial_size: cdt.QLength,

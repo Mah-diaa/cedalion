@@ -297,6 +297,6 @@ def get_snirf2bids_example_dataset() -> tuple[Path, Path]:
     return dataset_dir, mapping_file
 
 
-def get_fieldtrip_colin27_landmarks() -> cdt.LabeledPointCloud:
+def get_fieldtrip_colin27_landmarks() -> cdt.LabeledPoints:
     fname = DATASETS.fetch("fieldtrip_standard1005.elc")
     return cedalion.io.read_fieldtrip_elc(fname)
