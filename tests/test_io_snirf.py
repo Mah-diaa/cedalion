@@ -35,11 +35,19 @@ def test_read_snirf(fname: str):
 @skip_if_snirf_zoo_unavailable
 @pytest.mark.parametrize("fname", testfiles)
 def test_write_snirf(fname):
-    recs = cedalion.io.read_snirf(fname)
+    recs1 = cedalion.io.read_snirf(fname)
 
     with TemporaryDirectory() as tmpdirname:
-        fname = Path(tmpdirname) / "test.snirf"
-        cedalion.io.snirf.write_snirf(fname, recs)
+        tmp_fname = Path(tmpdirname) / "test.snirf"
+        cedalion.io.snirf.write_snirf(tmp_fname, recs1)
+
+        recs2 = cedalion.io.read_snirf(tmp_fname)
+
+        assert len(recs2) == len(recs1)
+        for r1, r2 in zip (recs1, recs2):
+            assert (r1.geo3d == r2.geo3d).all().item()
+
+
 
 
 def test_add_number_to_name():
