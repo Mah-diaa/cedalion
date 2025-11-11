@@ -155,7 +155,7 @@ class FluenceFile:
 
     def create_fluence_dataset(
         self,
-        optode_pos: cdt.LabeledPointCloud,
+        optode_pos: cdt.LabeledPoints,
         wavelengths: np.ndarray,
         fluence_shape : tuple[int, int, int],
         units : str

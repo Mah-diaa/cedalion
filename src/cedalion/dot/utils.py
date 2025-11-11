@@ -1,17 +1,15 @@
 """Utility functions for image reconstruction."""
 
-import xarray as xr
 import numpy as np
-import cedalion
-from cedalion import units
-import cedalion.dataclasses as cdc
-import cedalion.typing as cdt
-import cedalion.geometry.segmentation as segm
-from scipy.sparse import coo_array
 import scipy.stats
+import xarray as xr
+from scipy.sparse import coo_array
 
+import cedalion
+import cedalion.dataclasses as cdc
+import cedalion.geometry.segmentation as segm
+import cedalion.typing as cdt
 from cedalion import xrutils
-
 
 # FIXME right location?
 def map_segmentation_mask_to_surface(
@@ -120,23 +118,22 @@ def normal_hrf(t, t_peak, t_std, vmax):
 
 
 def create_mock_activation_below_point(
-    head_model: "cedalion.imagereco.forward_model.TwoSurfaceHeadModel",
-    point: cdt.LabeledPointCloud,
-    time_length: units.Quantity,
-    sampling_rate: units.Quantity,
-    spatial_size: units.Quantity,
-    vmax: units.Quantity,
+    head_model: "cedalion.dot.TwoSurfaceHeadModel",
+    point: cdt.LabeledPoints,
+    time_length: cdt.QTime,
+    sampling_rate: cdt.QFrequency,
+    spatial_size: cdt.QLength,
+    vmax: float,
 ):
     """Create a mock activation below a point.
 
     Args:
-        head_model (cedalion.imagereco.forward_model.TwoSurfaceHeadModel): The head
-            model.
-        point (cdt.LabeledPointCloud): The point below which to create the activation.
-        time_length (units.Quantity): The length of the activation.
-        sampling_rate (units.Quantity): The sampling rate.
-        spatial_size (units.Quantity): The spatial size of the activation.
-        vmax (units.Quantity): The maximum value of the activation.
+        head_model: The head model.
+        point: The point below which to create the activation.
+        time_length: The length of the activation.
+        sampling_rate: The sampling rate.
+        spatial_size: The spatial size of the activation.
+        vmax: The maximum value of the activation.
 
     Returns:
         xr.DataArray: The activation.

@@ -54,7 +54,7 @@ class Surface(ABC):
 
     @property
     @abstractmethod
-    def vertices(self) -> cdt.LabeledPointCloud:
+    def vertices(self) -> cdt.LabeledPoints:
         raise NotImplementedError()
 
     @property
@@ -85,7 +85,7 @@ class Surface(ABC):
 
         return self._kdtree
 
-    def snap(self, points: cdt.LabeledPointCloud):
+    def snap(self, points: cdt.LabeledPoints):
         """Snap points to the nearest vertices on the surface."""
         if self.crs != points.points.crs:
             raise CRSMismatchError.unexpected_crs(
@@ -123,7 +123,7 @@ class Voxels:
     units: pint.Unit
 
     @property
-    def vertices(self) -> cdt.LabeledPointCloud:
+    def vertices(self) -> cdt.LabeledPoints:
         result = xr.DataArray(
             self.voxels,
             dims=["label", self.crs],
@@ -179,7 +179,7 @@ class TrimeshSurface(Surface):
     mesh: trimesh.Trimesh
 
     @property  # FIXME consider cached_property?
-    def vertices(self) -> cdt.LabeledPointCloud:
+    def vertices(self) -> cdt.LabeledPoints:
         coords = {"label": np.arange(len(self.mesh.vertices))}
         coords.update({k: ("label", v) for k, v in self.vertex_coords.items()})
 
@@ -195,6 +195,13 @@ class TrimeshSurface(Surface):
             result = result.set_xindex(k)
 
         return result
+
+    def __repr__(self) -> str:
+        return (
+            f"TrimeshSurface(faces: {self.nfaces} vertices: {self.nvertices} "
+            f"crs: {self.crs} units: {self.units} "
+            f"vertex_coords: {list(self.vertex_coords.keys())})"
+        )
 
     @property
     def nvertices(self) -> int:
@@ -254,7 +261,7 @@ class TrimeshSurface(Surface):
             smoothed, self.crs, self.units, vertex_coords=deepcopy(self.vertex_coords)
         )
 
-    def get_vertex_normals(self, points: cdt.LabeledPointCloud, normalized=True):
+    def get_vertex_normals(self, points: cdt.LabeledPoints, normalized=True):
         """Get normals of vertices closest to the provided points."""
 
         assert points.points.crs == self.crs
@@ -313,7 +320,7 @@ class VTKSurface(Surface):
     mesh: vtk.vtkPolyData
 
     @property
-    def vertices(self) -> cdt.LabeledPointCloud:
+    def vertices(self) -> cdt.LabeledPoints:
         vertices = vtk_to_numpy(self.mesh.GetPoints().GetData())
         coords = {"label": np.arange(len(vertices))}
         coords.update({k : ("label", v) for k,v in self.vertex_coords.items()})
@@ -404,7 +411,7 @@ class PycortexSurface(Surface):
         self._nLC_solvers = dict()
 
     @property
-    def vertices(self) -> cdt.LabeledPointCloud:
+    def vertices(self) -> cdt.LabeledPoints:
         result = xr.DataArray(
             self.mesh.pts,
             dims=["label", self.crs],
@@ -440,7 +447,7 @@ class PycortexSurface(Surface):
     def decimate(self, face_count: int) -> "PycortexSurface":
         raise NotImplementedError("Decimation not implemented for PycortexSurface")
 
-    def get_vertex_normals(self, points: cdt.LabeledPointCloud, normalized=True):
+    def get_vertex_normals(self, points: cdt.LabeledPoints, normalized=True):
         assert points.points.crs == self.crs
         assert points.pint.units == self.units
         points = points.pint.dequantify()

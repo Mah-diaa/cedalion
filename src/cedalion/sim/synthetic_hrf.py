@@ -12,9 +12,10 @@ import xarray as xr
 
 import cedalion.dataclasses as cdc
 import cedalion.dataclasses.geometry as cdg
-import cedalion.imagereco.forward_model as cfm
+
+import cedalion.dot.head_model as cdhm
 import cedalion.models.glm as glm
-import cedalion.plots
+import cedalion.vis.blocks as vbx
 import cedalion.typing as cdt
 from cedalion import units
 from cedalion.models.glm.basis_functions import TemporalBasisFunction, _to_unit
@@ -23,7 +24,7 @@ from cedalion.sigproc.frequency import sampling_rate
 
 
 def build_spatial_activation(
-    head_model: cfm.TwoSurfaceHeadModel,
+    head_model: cdhm.TwoSurfaceHeadModel,
     seed_vertex: int,
     spatial_scale: cdt.QLength = 1 * units.cm,
     intensity_scale: cdt.QConcentration = 1 * units.micromolar,
@@ -350,8 +351,9 @@ def plot_spatial_activation(
         spatial_img, brain.mesh.visual.vertex_colors, log_scale=log_scale
     )
     brain.mesh.visual.vertex_colors = colors_blob
+
     plt_pv = pv.Plotter()
-    cedalion.plots.plot_surface(plt_pv, brain)
+    vbx.plot_surface(plt_pv, brain)
     plt_pv.camera.position = (vertices[seed] - center_brain) * 7 + center_brain
     plt_pv.camera.focal_point = vertices[seed]
     plt_pv.camera.up = [0, 0, 1]
