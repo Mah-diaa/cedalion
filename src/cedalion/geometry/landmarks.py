@@ -8,7 +8,8 @@ import vtk.util.numpy_support as vnp
 import xarray as xr
 import pyvista as pv
 
-import cedalion.plots
+import cedalion.vis.blocks as vbx
+
 from cedalion.dataclasses import (
     Surface,
     TrimeshSurface,
@@ -48,7 +49,7 @@ def _intersect_mesh_with_triangle(
     p1: np.ndarray,
     p2: np.ndarray,
     select: list[float] | None = None,
-) -> (np.ndarray, np.ndarray, np.ndarray | None):
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Find the line along the mesh through three points.
 
     Construct a line on a surface meshe from p0 through p1 to p2. To that end the
@@ -336,8 +337,8 @@ class LandmarksBuilder1010:
     def plot(self):
         """Plot scalp surface with landmarks."""
         plt = pv.Plotter()
-        cedalion.plots.plot_surface(plt, self.scalp_surface)
-        cedalion.plots.plot_labeled_points(plt, self.landmarks_mm.pint.quantify())
+        vbx.plot_surface(plt, self.scalp_surface)
+        vbx.plot_labeled_points(plt, self.landmarks_mm.pint.quantify())
 
         for points in self.lines:
             lines = pv.MultipleLines(points)

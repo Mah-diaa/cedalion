@@ -15,7 +15,7 @@ import cedalion.dataclasses.geometry as cdg
 
 import cedalion.dot.head_model as cdhm
 import cedalion.models.glm as glm
-import cedalion.plots
+import cedalion.vis.blocks as vbx
 import cedalion.typing as cdt
 from cedalion import units
 from cedalion.models.glm.basis_functions import TemporalBasisFunction, _to_unit
@@ -351,8 +351,9 @@ def plot_spatial_activation(
         spatial_img, brain.mesh.visual.vertex_colors, log_scale=log_scale
     )
     brain.mesh.visual.vertex_colors = colors_blob
+
     plt_pv = pv.Plotter()
-    cedalion.plots.plot_surface(plt_pv, brain)
+    vbx.plot_surface(plt_pv, brain)
     plt_pv.camera.position = (vertices[seed] - center_brain) * 7 + center_brain
     plt_pv.camera.focal_point = vertices[seed]
     plt_pv.camera.up = [0, 0, 1]

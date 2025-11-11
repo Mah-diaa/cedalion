@@ -638,6 +638,7 @@ class TwoSurfaceHeadModel:
 
         return result
 
+
     def scale_to_headsize(
         self, circumference: cdt.QLength, nz_cz_iz: cdt.QLength, lpa_cz_rpa: cdt.QLength
     ) -> "TwoSurfaceHeadModel":

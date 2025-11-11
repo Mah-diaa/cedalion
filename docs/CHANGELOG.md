@@ -10,6 +10,7 @@
 - Added `cedalion.xrutils.dot_dataarray_csr` for matrix products between `xr.DataArray` 
   and `scipy.sparse` arrays, by [Eike Middell](https://github.com/emiddell).
 ### Changed
+- Refactored `cedalion.plots` into `cedalion.vis` and its subpackages. This cleans up the code structure and should help with discovering existing functions. The package `cedalion.vis.blocks` emphasizes building blocks for larger visualizations. Please refer to `examples/plots_visualization/12_plots_example.ipynb` to get an overview. Importing `cedalion.plots` will throw a deprecation warning to trigger adoption. By [Eike Middell](https://github.com/emiddell).
 - Renamed `LabeledPointCloud` to `LabeledPoints`.
 - Split up the `.nirs` submodule into `.nirs.cw`, `.nirs.fd` and `.nirs.td`. 
 - Merged the submodules `cedalion.datasets` and `cedalion.data`. All functions to
