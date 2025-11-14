@@ -334,6 +334,8 @@ class TwoSurfaceHeadModel:
             parcels = cedalion.io.read_parcellations(parcel_file)
             assert len(parcels) == brain_ijk.nvertices
             brain_ijk.vertex_coords["parcel"] = np.asarray(parcels.Label.tolist())
+        else:
+            parcels = None
 
         if parcel_volume_file is not None:
             import nibabel as nib
@@ -350,10 +352,13 @@ class TwoSurfaceHeadModel:
                     assert csv_cbig[i] == l
             assert brain_mask.shape == voxel_parcels.shape
             assert (t_ijk2ras.values == affine).all()
+            voxel_parcels = voxel_parcels.astype(int)
+        else:
+            voxel_parcels = None
 
         voxel_to_vertex_brain = map_segmentation_mask_to_surface(
             brain_mask, t_ijk2ras, brain_ijk.apply_transform(t_ijk2ras),
-            parcels_vox=voxel_parcels.astype(int), parcels_verts=parcels
+            parcels_vox=voxel_parcels, parcels_verts=parcels
         )
         voxel_to_vertex_scalp = map_segmentation_mask_to_surface(
             scalp_mask, t_ijk2ras, scalp_ijk.apply_transform(t_ijk2ras)

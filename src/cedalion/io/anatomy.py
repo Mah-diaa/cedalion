@@ -168,6 +168,7 @@ def read_parcellations(parcel_file: str | Path) -> pd.DataFrame:
     parcels["Vertices"] = parcels["Vertices"].astype(int)
     parcels = parcels.sort_values("Vertices")
 
-    parcels["Label"] = parcels["Label"].apply(lambda x: "_".join(x.split(" ")) + "H")
+    if not parcels["Label"].values[1].endswith('H'):
+        parcels["Label"] = parcels["Label"].apply(lambda x: "_".join(x.split(" ")) + "H")
 
     return parcels
