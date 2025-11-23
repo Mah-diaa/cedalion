@@ -212,7 +212,7 @@ class PointsAccessor:
         coordinates: ArrayLike,
         type: Union[cdc.PointType, List[cdc.PointType]],
         group: Union[str, List[str]] = None,
-    ) -> cdt.LabeledPointCloud:
+    ) -> cdt.LabeledPoints:
         # Handle the single point case
         if isinstance(label, str):
             assert isinstance(

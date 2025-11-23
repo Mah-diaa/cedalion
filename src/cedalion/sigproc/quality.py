@@ -18,7 +18,7 @@ import cedalion.xrutils as xrutils
 import cedalion.sigproc.frequency as freq
 from cedalion import Quantity, units
 from cedalion.typing import NDTimeSeries
-import cedalion.nirs as nirs
+import cedalion.nirs
 from .frequency import freq_filter, sampling_rate
 
 logger = logging.getLogger("cedalion")
@@ -202,7 +202,7 @@ def gvtd(amplitudes: NDTimeSeries, stat_type: str = "default", n_std: int = 10):
     fcut_min = 0.01
     fcut_max = 0.5
 
-    od = nirs.int2od(amplitudes)
+    od = cedalion.nirs.cw.int2od(amplitudes)
     od = xr.where(np.isinf(od), 0, od)
     od = xr.where(np.isnan(od), 0, od)
     od.time.attrs["units"] = units.s
@@ -590,14 +590,14 @@ def mean_amp(amplitudes: cdt.NDTimeSeries, amp_range: tuple[Quantity, Quantity])
 @cdc.validate_schemas
 def sd_dist(
     amplitudes: cdt.NDTimeSeries,
-    geo3D: cdt.LabeledPointCloud,
+    geo3D: cdt.LabeledPoints,
     sd_range: tuple[Quantity, Quantity] = (0 * units.cm, 4.5 * units.cm),
 ):
     """Calculate source-detector separations and mask channels outside a distance range.
 
     Args:
         amplitudes (:class:`NDTimeSeries`, (channel, *)): input time series
-        geo3D (:class:`LabeledPointCloud`): 3D optode coordinates
+        geo3D (:class:`LabeledPoints`): 3D optode coordinates
         sd_range: if source-detector separation < sd_range[0] or > sd_range[1]
              then it is excluded as an active channelin sd_mask
 

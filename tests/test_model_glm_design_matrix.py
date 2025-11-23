@@ -3,7 +3,7 @@ import xarray as xr
 from pint.testsuite.helpers import assert_quantity_almost_equal as assert_approx
 
 import cedalion
-import cedalion.datasets
+import cedalion.data
 import cedalion.models.glm as glm
 import cedalion.models.glm.design_matrix as dm
 
@@ -11,8 +11,8 @@ from cedalion import units
 
 @pytest.fixture
 def rec():
-    rec = cedalion.datasets.get_snirf_test_data()[0]
-    rec["od"] = cedalion.nirs.int2od(rec["amp"])
+    rec = cedalion.data.get_snirf_test_data()[0]
+    rec["od"] = cedalion.nirs.cw.int2od(rec["amp"])
 
     # differential pathlenght factors
     dpf = xr.DataArray(
@@ -21,7 +21,7 @@ def rec():
         coords={"wavelength": rec["amp"].wavelength},
     )
 
-    rec["conc"] = cedalion.nirs.od2conc(rec["od"], rec.geo3d, dpf, spectrum="prahl")
+    rec["conc"] = cedalion.nirs.cw.od2conc(rec["od"], rec.geo3d, dpf, spectrum="prahl")
 
     return rec
 
