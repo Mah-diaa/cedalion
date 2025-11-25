@@ -76,8 +76,13 @@ class ForwardModel:
                 source, detector, channel and wavelength.
         """
 
-        assert head_model.crs == "ijk"  # FIXME
         assert head_model.crs == geo3d.points.crs
+
+        # the forward model operates in voxel space. If the provided head model
+        # is in scanner space, transform it back to voxel space.
+        if head_model.crs != "ijk":
+            head_model = head_model.apply_transform(head_model.t_ras2ijk)
+            geo3d = geo3d.points.apply_transform(head_model.t_ras2ijk)
 
         self.head_model = head_model
         self.measurement_list = measurement_list
