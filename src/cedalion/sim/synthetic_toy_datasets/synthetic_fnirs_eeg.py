@@ -62,7 +62,7 @@ class BimodalToyDataSimulation:
         via the attributes ``x`` (high-rate channels) and ``x_power`` (epoch
         downsampled). The downsampled ``x_power`` is aligned with fNIRS
         recordings ``y``. Target sources are accessible as ``sx_t`` and
-        ``sy_t``; thei powerband timecourse of the former is available 
+        ``sy_t``; thei powerband timecourse of the former is available
         as ``sx_power``.
 
 
@@ -83,41 +83,54 @@ class BimodalToyDataSimulation:
         sy_montage (xr.DataArray): Montage for Y channels.
         s_labels (list[str]): Labels for target sources.
         s_target_positions (xr.DataArray): 2D positions of target sources.
-        sx_t (xr.DataArray): Target sources for X modality, dims ``('source', 'time')``.
-        sy_t (xr.DataArray): Target sources for Y modality, dims ``('source', 'time')``, sampled over epochs.
-        sx_ba (xr.DataArray): Background sources for X modality, dims ``('source', 'time')``.
-        sy_ba (xr.DataArray): Background sources for Y modality, dims ``('source', 'time')``, sampled over epochs.
-        sx_power (xr.DataArray): Power of target sources for X modality, dims ``('source', 'time')``, sampled over epochs.
-        Ax (xr.DataArray): Mixing matrix for X modality, dims ``('channel', 'source')``.
-        ax_t (xr.DataArray): Mixing patterns for target sources in X, dims ``('channel', 'source')``.
-        ax_ba (xr.DataArray): Mixing patterns for background sources in X, dims ``('channel', 'source')``.
-        Ay (xr.DataArray): Mixing matrix for Y modality, dims ``('channel', 'source')``.
-        ay_t (xr.DataArray): Mixing patterns for target sources in Y, dims ``('channel', 'source')``.
-        ay_ba (xr.DataArray): Mixing patterns for background sources in Y, dims ``('channel', 'source')``.
-        x (xr.DataArray): Observed channels for X modality, dims ``('channel', 'time')``.
-        x_power (xr.DataArray): Power of observed channels for X modality, dims ``('channel', 'time')``, sampled over epochs.
-        y (xr.DataArray): Observed channels for Y modality, dims ``('channel', 'time')``, sampled over epochs.
+        sx_t (xr.DataArray): Target sources for X modality,
+            dims ``('source', 'time')``.
+        sy_t (xr.DataArray): Target sources for Y modality,
+            dims ``('source', 'time')``, sampled over epochs.
+        sx_ba (xr.DataArray): Background sources for X modality,
+            dims ``('source', 'time')``.
+        sy_ba (xr.DataArray): Background sources for Y modality,
+            dims ``('source', 'time')``, sampled over epochs.
+        sx_power (xr.DataArray): Power of target sources for X modality,
+            dims ``('source', 'time')``, sampled over epochs.
+        Ax (xr.DataArray): Mixing matrix for X modality,
+            dims ``('channel', 'source')``.
+        ax_t (xr.DataArray): Mixing patterns for target sources in X,
+            dims ``('channel', 'source')``.
+        ax_ba (xr.DataArray): Mixing patterns for background sources in X,
+            dims ``('channel', 'source')``.
+        Ay (xr.DataArray): Mixing matrix for Y modality,
+            dims ``('channel', 'source')``.
+        ay_t (xr.DataArray): Mixing patterns for target sources in Y,
+            dims ``('channel', 'source')``.
+        ay_ba (xr.DataArray): Mixing patterns for background sources in Y,
+            dims ``('channel', 'source')``.
+        x (xr.DataArray): Observed channels for X modality,
+            dims ``('channel', 'time')``.
+        x_power (xr.DataArray): Power of observed channels for X modality,
+            dims ``('channel', 'time')``, sampled over epochs.
+        y (xr.DataArray): Observed channels for Y modality,
+            dims ``('channel', 'time')``, sampled over epochs.
 
     """
 
-    def __init__(self, config, seed=None, mixing_type='structured'):
-
+    def __init__(self, config, seed=None, mixing_type="structured"):
         # Parameters
         self.args = generate_args(config)
         self.seed = seed if seed is not None else int(datetime.now().timestamp())
         set_seed(self.seed)  # Set seed for reproducibility
 
         # Define montage as 2D coordinates of channels
-        self.x_montage = self.generate_montage(self.args.Nx, channel_label='X')
-        self.y_montage = self.generate_montage(self.args.Ny, channel_label='Y')
+        self.x_montage = self.generate_montage(self.args.Nx, channel_label="X")
+        self.y_montage = self.generate_montage(self.args.Ny, channel_label="Y")
 
         # Simulate location of target sources
-        self.s_labels = ['S' + str(i + 1) for i in range(self.args.Ns_all)]
+        self.s_labels = ["S" + str(i + 1) for i in range(self.args.Ns_all)]
         self.s_target_positions = np.random.rand(self.args.Ns_target, 2)
         self.s_target_positions = xr.DataArray(
             self.s_target_positions,
-            dims=['source', 'dim'],
-            coords={'source': self.s_labels[: self.args.Ns_target], 'dim': ['x', 'y']},
+            dims=["source", "dim"],
+            coords={"source": self.s_labels[: self.args.Ns_target], "dim": ["x", "y"]},
         )
 
         # Define coordinates
@@ -130,26 +143,39 @@ class BimodalToyDataSimulation:
         # Calculcate source power
         sx_power = np.abs(hilbert(self.sx_t))
         sx_power = np.concatenate(
-            [(split_epochs(sxp, self.args.e_len).mean(axis=1)).reshape(1, -1) for sxp in sx_power]
+            [
+                (split_epochs(sxp, self.args.e_len).mean(axis=1)).reshape(1, -1)
+                for sxp in sx_power
+            ]
         )
         self.sx_power = xr.DataArray(
             sx_power,
-            dims=['source', 'time'],
-            coords={'time': self.time_y, 'source': self.s_labels[: self.args.Ns_target]},
+            dims=["source", "time"],
+            coords={
+                "time": self.time_y,
+                "source": self.s_labels[: self.args.Ns_target],
+            },
         )
 
         # Generate random mixing matrix and spatial patterns
-        self.Ax, self.ax_t, self.ax_ba, self.Ay, self.ay_t, self.ay_ba = self.generate_patterns(
-            mixing_type
+        self.Ax, self.ax_t, self.ax_ba, self.Ay, self.ay_t, self.ay_ba = (
+            self.generate_patterns(mixing_type)
         )
 
         # Get channels via forward model
-        self.x_t, self.x_noise = self.forward_model(self.ax_t, self.ax_ba, self.sx_t, self.sx_ba)
+        self.x_t, self.x_noise = self.forward_model(
+            self.ax_t, self.ax_ba, self.sx_t, self.sx_ba
+        )
         self.x, self.x_power = self.get_channels(
-            x_t=self.x_t, x_noise=self.x_noise, gamma=self.args.gamma, calculate_power=True
+            x_t=self.x_t,
+            x_noise=self.x_noise,
+            gamma=self.args.gamma,
+            calculate_power=True,
         )
 
-        self.y_t, self.y_noise = self.forward_model(self.ay_t, self.ay_ba, self.sy_t, self.sy_ba)
+        self.y_t, self.y_noise = self.forward_model(
+            self.ay_t, self.ay_ba, self.sy_t, self.sy_ba
+        )
         self.y = self.get_channels(self.y_t, self.y_noise, self.args.gamma)
 
     def preprocess_data(self, train_test_split=0.8):
@@ -183,11 +209,18 @@ class BimodalToyDataSimulation:
 
         # Split into train and test sets
         T_train = self.args.T * train_test_split
-        x_train, x_test = x.sel(time=slice(0, T_train)), x.sel(time=slice(T_train, None))
-        x_power_train, x_power_test = x_power.sel(time=slice(0, T_train)), x_power.sel(
-            time=slice(T_train, None)
+        x_train, x_test = (
+            x.sel(time=slice(0, T_train)),
+            x.sel(time=slice(T_train, None)),
         )
-        y_train, y_test = y.sel(time=slice(0, T_train)), y.sel(time=slice(T_train, None))
+        x_power_train, x_power_test = (
+            x_power.sel(time=slice(0, T_train)),
+            x_power.sel(time=slice(T_train, None)),
+        )
+        y_train, y_test = (
+            y.sel(time=slice(0, T_train)),
+            y.sel(time=slice(T_train, None)),
+        )
 
         # Restrict to test set for the source signals
         sx = sx.sel(time=slice(T_train, None))
@@ -196,15 +229,15 @@ class BimodalToyDataSimulation:
 
         # Wrap into a dictionary for easy access
         preprocess_data_dict = {
-            'x_train': x_train,
-            'x_test': x_test,
-            'x_power_train': x_power_train,
-            'x_power_test': x_power_test,
-            'y_train': y_train,
-            'y_test': y_test,
-            'sx': sx,
-            'sx_power': sx_power,
-            'sy': sy,
+            "x_train": x_train,
+            "x_test": x_test,
+            "x_power_train": x_power_train,
+            "x_power_test": x_power_test,
+            "y_train": y_train,
+            "y_test": y_test,
+            "sx": sx,
+            "sx_power": sx_power,
+            "sy": sy,
         }
 
         return preprocess_data_dict
@@ -250,10 +283,9 @@ class BimodalToyDataSimulation:
         # Create xarray DataArray with coordinates
         channels = [channel_label + str(i + 1) for i in range(Nc)]
         montage = xr.DataArray(
-            positions, 
-            dims=['channel', 'dim'], 
-            coords={'channel': channels, 
-                    'dim': ['x', 'y']}
+            positions,
+            dims=["channel", "dim"],
+            coords={"channel": channels, "dim": ["x", "y"]},
         )
 
         return montage
@@ -281,7 +313,7 @@ class BimodalToyDataSimulation:
                   ``('source','time')`` of length ``(Ns_ba, Ne)``.
         """
 
-        print('Simulating sources...')
+        print("Simulating sources...")
 
         # Target sources
 
@@ -295,17 +327,23 @@ class BimodalToyDataSimulation:
         for i in range(self.args.Ns_target):
             # Simulate extended source
             amplitude_t = self.simulate_amplitude(Nt=Nt_w_shift)
-            s_extended = self.simulate_random_source(T=T_w_shift, Nt=Nt_w_shift) * amplitude_t
+            s_extended = (
+                self.simulate_random_source(T=T_w_shift, Nt=Nt_w_shift) * amplitude_t
+            )
 
             # Simulate time-shifted X and Y target sources
-            sx_t[i] = s_extended[self.args.NdT:]
+            sx_t[i] = s_extended[self.args.NdT :]
             if self.args.dT > 0:
                 sy_t[i] = standardize(
-                    split_epochs(amplitude_t[: -self.args.NdT], self.args.e_len).mean(axis=1).reshape(1, -1)
+                    split_epochs(amplitude_t[: -self.args.NdT], self.args.e_len)
+                    .mean(axis=1)
+                    .reshape(1, -1)
                 )
             elif self.args.dT == 0:
                 sy_t[i] = standardize(
-                    split_epochs(amplitude_t, self.args.e_len).mean(axis=1).reshape(1, -1)
+                    split_epochs(amplitude_t, self.args.e_len)
+                    .mean(axis=1)
+                    .reshape(1, -1)
                 )
             else:
                 raise ValueError("dT must be non-negative.")
@@ -316,37 +354,56 @@ class BimodalToyDataSimulation:
 
         # Background sources
         sx_ba = np.concatenate(
-            [self.simulate_random_source().reshape(1, -1) * self.simulate_amplitude() for j in range(self.args.Ns_ba)]
+            [
+                self.simulate_random_source().reshape(1, -1) * self.simulate_amplitude()
+                for j in range(self.args.Ns_ba)
+            ]
         )
         sy_ba = np.concatenate(
             [
-                standardize(split_epochs(self.simulate_amplitude(), self.args.e_len).mean(axis=1).reshape(1, -1))
+                standardize(
+                    split_epochs(self.simulate_amplitude(), self.args.e_len)
+                    .mean(axis=1)
+                    .reshape(1, -1)
+                )
                 for j in range(self.args.Ns_ba)
             ]
         )
 
-        print('Finished')
+        print("Finished")
 
         # Bring to xarray format
         sx_t = xr.DataArray(
             sx_t,
-            dims=['source', 'time'],
-            coords={'source': self.s_labels[: self.args.Ns_target], 'time': self.time_x},
+            dims=["source", "time"],
+            coords={
+                "source": self.s_labels[: self.args.Ns_target],
+                "time": self.time_x,
+            },
         )
         sy_t = xr.DataArray(
             sy_t,
-            dims=['source', 'time'],
-            coords={'source': self.s_labels[: self.args.Ns_target], 'time': self.time_y},
+            dims=["source", "time"],
+            coords={
+                "source": self.s_labels[: self.args.Ns_target],
+                "time": self.time_y,
+            },
         )
         sx_ba = xr.DataArray(
             sx_ba,
-            dims=['source', 'time'],
-            coords={'source': self.s_labels[self.args.Ns_target :], 'time': self.time_x},
+            dims=["source", "time"],
+            coords={
+                "source": self.s_labels[self.args.Ns_target :],
+                "time": self.time_x,
+            },
         )
         sy_ba = xr.DataArray(
             sy_ba,
-            dims=['source', 'time'],
-            coords={'source': self.s_labels[self.args.Ns_target :], 'time': self.time_y},
+            dims=["source", "time"],
+            coords={
+                "source": self.s_labels[self.args.Ns_target :],
+                "time": self.time_y,
+            },
         )
 
         return sx_t, sy_t, sx_ba, sy_ba
@@ -379,7 +436,9 @@ class BimodalToyDataSimulation:
 
         # Define signal in frequency-domain (unit amplitude and random phases)
         Fs = np.zeros(Nt, dtype=complex)
-        Fs[f_min_ndx:f_max_ndx] = 1 * np.e ** (1j * np.random.uniform(0, 2 * np.pi, (f_max_ndx - f_min_ndx)))
+        Fs[f_min_ndx:f_max_ndx] = 1 * np.e ** (
+            1j * np.random.uniform(0, 2 * np.pi, (f_max_ndx - f_min_ndx))
+        )
 
         # Get temporal-domain signal from inverse FT
         s = np.fft.ifft(Fs).real
@@ -409,7 +468,7 @@ class BimodalToyDataSimulation:
 
         return amplitude
 
-    def generate_patterns(self, mixing_type='structured'):
+    def generate_patterns(self, mixing_type="structured"):
         """Generate mixing matrices and split them into target/background.
 
         Args:
@@ -418,11 +477,10 @@ class BimodalToyDataSimulation:
                 positions to channel locations; otherwise leave as random.
 
         Returns:
-            tuple[xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray, xr.DataArray]:
-                ``(Ax, ax_t, ax_ba, Ay, ay_t, ay_ba)`` where each is an
-                ``xr.DataArray`` with dims ``('channel','source')``. ``*_t``
-                contains only the first ``Ns_target`` sources and ``*_ba`` the
-                background sources.
+            tuple: ``(Ax, ax_t, ax_ba, Ay, ay_t, ay_ba)`` where each is an
+                ``xr.DataArray`` with dims ``('channel','source')``. ``*_t`` contains
+                only the first ``Ns_target`` sources and ``*_ba`` the background
+                sources.
         """
 
         # Generate random mixing matrix with normal distribution
@@ -430,24 +488,36 @@ class BimodalToyDataSimulation:
         Ay = np.random.normal(0, 1, (self.args.Ny, self.args.Ns_all))
 
         # Assign localized spatial structure to target sources
-        if mixing_type == 'structured':
+        if mixing_type == "structured":
             for k in range(self.args.Ns_target):
                 # Compute squared distances between channels and this center
-                dist2x = np.sum((self.x_montage.data - self.s_target_positions[k].data) ** 2, axis=1)
-                dist2y = np.sum((self.y_montage.data - self.s_target_positions[k].data) ** 2, axis=1)
+                dist2x = np.sum(
+                    (self.x_montage.data - self.s_target_positions[k].data) ** 2, axis=1
+                )
+                dist2y = np.sum(
+                    (self.y_montage.data - self.s_target_positions[k].data) ** 2, axis=1
+                )
 
                 # RBF pattern and amplitude
                 alphax = 1
                 alphay = 1
-                Ax[:, k] = alphax * np.exp(-dist2x / (2 * self.args.ellx ** 2))
-                Ay[:, k] = alphay * np.exp(-dist2y / (2 * self.args.elly ** 2))
+                Ax[:, k] = alphax * np.exp(-dist2x / (2 * self.args.ellx**2))
+                Ay[:, k] = alphay * np.exp(-dist2y / (2 * self.args.elly**2))
                 # Add noise
                 Ax[:, k] += self.args.sigma_noise * np.random.randn(self.args.Nx)
                 Ay[:, k] += self.args.sigma_noise * np.random.randn(self.args.Ny)
 
         # Bring to xarray format
-        Ax = xr.DataArray(Ax, dims=['channel', 'source'], coords={'channel': self.x_montage.channel, 'source': self.s_labels})
-        Ay = xr.DataArray(Ay, dims=['channel', 'source'], coords={'channel': self.y_montage.channel, 'source': self.s_labels})
+        Ax = xr.DataArray(
+            Ax,
+            dims=["channel", "source"],
+            coords={"channel": self.x_montage.channel, "source": self.s_labels},
+        )
+        Ay = xr.DataArray(
+            Ay,
+            dims=["channel", "source"],
+            coords={"channel": self.y_montage.channel, "source": self.s_labels},
+        )
 
         # Split into target and background sources
         ax_t = Ax[:, 0 : self.args.Ns_target]
@@ -512,10 +582,15 @@ class BimodalToyDataSimulation:
         if calculate_power:
             x_power = np.abs(hilbert(x))
             x_power = np.concatenate(
-                [(split_epochs(xp, self.args.e_len).mean(axis=1)).reshape(1, -1) for xp in x_power]
+                [
+                    (split_epochs(xp, self.args.e_len).mean(axis=1)).reshape(1, -1)
+                    for xp in x_power
+                ]
             )
             x_power = xr.DataArray(
-                x_power, dims=['channel', 'time'], coords={'time': self.time_y, 'channel': x.channel}
+                x_power,
+                dims=["channel", "time"],
+                coords={"time": self.time_y, "channel": x.channel},
             )
 
             return x, x_power
@@ -535,16 +610,16 @@ class BimodalToyDataSimulation:
 
         for i in range(self.args.Ns_target):
             plt.figure(figsize=(15, 4))
-            plt.plot(self.time_x, self.sx_t[i], label='Sx')
-            plt.plot(self.time_y, self.sy_t[i], '-*', label='Sy')
+            plt.plot(self.time_x, self.sx_t[i], label="Sx")
+            plt.plot(self.time_y, self.sy_t[i], "-*", label="Sy")
 
             # Envelope
             s_env = np.abs(hilbert(self.sx_t[i]))
-            plt.plot(self.time_x, s_env, label='Sx Envelope')
+            plt.plot(self.time_x, s_env, label="Sx Envelope")
 
             # Source power
             sx_power_norm = standardize(self.sx_power[i])
-            plt.plot(self.time_y, sx_power_norm, '-*', label='Sx Power (Normalized)')
+            plt.plot(self.time_y, sx_power_norm, "-*", label="Sx Power (Normalized)")
 
             if xlim is not None:
                 plt.xlim(xlim)
@@ -553,19 +628,20 @@ class BimodalToyDataSimulation:
 
             # Calculate correlation between Sy and Sx_power
             corr = np.corrcoef(self.sx_power[i], self.sy_t[i])[0, 1]
-            
+
             # Calculate correlation between Sy and envelope with time-shift
             if self.args.Nde:
                 corr_shifted = np.corrcoef(
-                    self.sx_power[i, :-self.args.Nde], self.sy_t[i, self.args.Nde:]
+                    self.sx_power[i, : -self.args.Nde], self.sy_t[i, self.args.Nde :]
                 )[0, 1]
 
                 plt.title(
-                    f'Source {i+1} | (Corr(Sy, Sx_power)= {corr:.5f}) | (Corr(Sy, Sx_power time-shifted) = {corr_shifted:.5f})'
+                    f"Source {i + 1} | (Corr(Sy, Sx_power)= {corr:.5f}) | "
+                    f"(Corr(Sy, Sx_power time-shifted) = {corr_shifted:.5f})"
                 )
             else:
-                plt.title(f'Source {i+1} | (Corr(Sy, Sx_power)= {corr:.5f})')
-            
+                plt.title(f"Source {i + 1} | (Corr(Sy, Sx_power)= {corr:.5f})")
+
             plt.legend()
             plt.grid()
             plt.show()
@@ -587,20 +663,22 @@ class BimodalToyDataSimulation:
             ax = [ax]
         # Background sources + noise
         for i in range(N):
-            ax[i].plot(self.time_x, self.x[i], label='X')
-            ax[i].plot(self.time_y, self.y[i], label='Y')
-            ax[i].set_title(f'Channel {i+1}')
-            ax[i].set_xlabel('Time [s]')
+            ax[i].plot(self.time_x, self.x[i], label="X")
+            ax[i].plot(self.time_y, self.y[i], label="Y")
+            ax[i].set_title(f"Channel {i + 1}")
+            ax[i].set_xlabel("Time [s]")
             ax[i].grid()
             ax[i].legend()
             if xlim is not None:
                 ax[i].set_xlim(xlim)
             if ylim is not None:
                 ax[i].set_ylim(ylim)
-        plt.suptitle('Observed Channels', fontsize=16, fontweight='bold')
+        plt.suptitle("Observed Channels", fontsize=16, fontweight="bold")
         plt.show()
 
-    def plot_mixing_patterns(self, Ax=None, Ay=None, cmap='viridis', activity_size=200, title=None):
+    def plot_mixing_patterns(
+        self, Ax=None, Ay=None, cmap="viridis", activity_size=200, title=None
+    ):
         """Plot mixing patterns for target sources across both modalities.
 
         This method generates a scatter plot of mixing patterns ``Ax`` and
@@ -670,37 +748,41 @@ class BimodalToyDataSimulation:
         for j in range(n_sources):
             # Ax (left)
             ax = axes[j, 0]
-            sc0 = ax.scatter(
+            ax.scatter(
                 x_pos[:, 0],
                 x_pos[:, 1],
                 c=Ax[:, j],
                 cmap=cmap,
                 norm=norm,
                 s=activity_size,
-                edgecolors='k',
+                edgecolors="k",
                 linewidths=0.5,
             )
-            ax.scatter(s_pos[j, 0], s_pos[j, 1], marker='x', c='red', s=120, linewidths=2)
-            ax.set_title(f'Ax (Source {j+1})')
-            ax.set_aspect('equal', adjustable='box')
+            ax.scatter(
+                s_pos[j, 0], s_pos[j, 1], marker="x", c="red", s=120, linewidths=2
+            )
+            ax.set_title(f"Ax (Source {j + 1})")
+            ax.set_aspect("equal", adjustable="box")
             ax.set_xlim(*xlims)
             ax.set_ylim(*ylims)
 
             # Ay (right)
             ay = axes[j, 1]
-            sc1 = ay.scatter(
+            ay.scatter(
                 y_pos[:, 0],
                 y_pos[:, 1],
                 c=Ay[:, j],
                 cmap=cmap,
                 norm=norm,
                 s=activity_size,
-                edgecolors='k',
+                edgecolors="k",
                 linewidths=0.5,
             )
-            ay.scatter(s_pos[j, 0], s_pos[j, 1], marker='x', c='red', s=120, linewidths=2)
-            ay.set_title(f'Ay (Source {j+1})')
-            ay.set_aspect('equal', adjustable='box')
+            ay.scatter(
+                s_pos[j, 0], s_pos[j, 1], marker="x", c="red", s=120, linewidths=2
+            )
+            ay.set_title(f"Ay (Source {j + 1})")
+            ay.set_aspect("equal", adjustable="box")
             ay.set_xlim(*xlims)
             ay.set_ylim(*ylims)
 
@@ -715,23 +797,28 @@ class BimodalToyDataSimulation:
         y1 = max(a.get_position().y1 for a in right_col_axes)
 
         cax = fig.add_axes([x1 + 0.01, y0, 0.02, y1 - y0])
-        cbar = fig.colorbar(mappable, cax=cax, orientation='vertical', label='Activity')
+        fig.colorbar(mappable, cax=cax, orientation="vertical", label="Activity")
 
         # Simple legend for source marker
         fig.legend(
             handles=[
                 Line2D(
-                    [0], [0], marker='x', linestyle='none', color='red', markersize=8, label='Target Source True Location'
+                    [0],
+                    [0],
+                    marker="x",
+                    linestyle="none",
+                    color="red",
+                    markersize=8,
+                    label="Target Source True Location",
                 )
             ],
-            loc='upper right',
+            loc="upper right",
         )
 
         # Title
         if title is not None:
-            plt.suptitle(title, fontsize=16, fontweight='bold')
+            plt.suptitle(title, fontsize=16, fontweight="bold")
         plt.show()
-
 
 
 def generate_args(config):
@@ -751,7 +838,7 @@ def generate_args(config):
 
     # Simulation parameters
     if type(config) is str:
-        with open(config, 'r') as f:
+        with open(config, "r") as f:
             args = Namespace(**yaml.safe_load(f))
     elif type(config) is dict:
         args = Namespace(**config)
@@ -799,7 +886,7 @@ def butter_lowpass(cut, fs, order):
 
     nyq = 0.5 * fs
     cut = cut / nyq
-    b, a = butter(order, cut, btype='low')
+    b, a = butter(order, cut, btype="low")
     return b, a
 
 
@@ -838,7 +925,7 @@ def f_normalize(x):
     return x / np.sqrt((x**2).sum())
 
 
-def standardize(x, dim='time'):
+def standardize(x, dim="time"):
     """Z-score standardize along a dimension (for xarray) or globally (numpy).
 
     Args:
