@@ -654,8 +654,8 @@ class _MAIN_GUI(QtWidgets.QMainWindow):
 
 def run_vis(
     blockaverage: cdt.NDTimeSeries,
-    geo2d: cdt.LabeledPointCloud,
-    geo3d: cdt.LabeledPointCloud,
+    geo2d: cdt.LabeledPoints,
+    geo3d: cdt.LabeledPoints,
 ):
     """Opens the visualization GUI.
 

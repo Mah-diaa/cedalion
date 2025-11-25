@@ -9,609 +9,32 @@ directory.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
 import logging
-from typing import Optional
 import os.path
 import warnings
 import sys
 from pathlib import Path
+from warnings import warn
 
 import numpy as np
 import pandas as pd
 import pint
-import scipy.sparse
-from scipy.spatial import KDTree
-import trimesh
 import xarray as xr
 
 import cedalion
 import cedalion.dataclasses as cdc
-from cedalion.geometry.registration import (
-    register_trans_rot_isoscale,
-    register_general_affine,
-)
+
 import cedalion.typing as cdt
 import cedalion.xrutils as xrutils
 import cedalion.io
+from cedalion.dot.head_model import TwoSurfaceHeadModel
 
-from cedalion.geometry.segmentation import (
-    surface_from_segmentation,
-    voxels_from_segmentation,
-)
-from cedalion.imagereco.utils import map_segmentation_mask_to_surface
 from cedalion.io.forward_model import FluenceFile, save_Adot
 
 from .tissue_properties import get_tissue_properties
 
 logger = logging.getLogger("cedalion")
 
-
-@dataclass
-class TwoSurfaceHeadModel:
-    """Head Model class to represent a segmented head.
-
-    Its main functions are reduced to work on voxel projections to scalp and cortex
-    surfaces.
-
-    Attributes:
-        segmentation_masks : xr.DataArray
-            Segmentation masks of the head for each tissue type.
-        brain : cdc.Surface
-            Surface of the brain.
-        scalp : cdc.Surface
-            Surface of the scalp.
-        landmarks : cdt.LabeledPointCloud
-            Anatomical landmarks in RAS space.
-        t_ijk2ras : cdt.AffineTransform
-            Affine transformation from ijk to RAS space.
-        t_ras2ijk : cdt.AffineTransform
-            Affine transformation from RAS to ijk space.
-        voxel_to_vertex_brain : scipy.sparse.spmatrix
-            Mapping from voxel to brain vertices.
-        voxel_to_vertex_scalp : scipy.sparse.spmatrix
-            Mapping from voxel to scalp vertices.
-        crs : str
-            Coordinate reference system of the head model.
-
-    Methods:
-        from_segmentation(cls, segmentation_dir, mask_files, landmarks_ras_file,
-            brain_seg_types, scalp_seg_types, smoothing, brain_face_count,
-            scalp_face_count): Construct instance from segmentation masks in NIfTI
-            format.
-        apply_transform(transform)
-            Apply a coordinate transformation to the head model.
-        save(foldername)
-            Save the head model to a folder.
-        load(foldername)
-            Load the head model from a folder.
-        align_and_snap_to_scalp(points)
-            Align and snap optodes or points to the scalp surface.
-    """
-
-    segmentation_masks: xr.DataArray
-    brain: cdc.Surface
-    scalp: cdc.Surface
-    landmarks: cdt.LabeledPointCloud
-    t_ijk2ras: cdt.AffineTransform
-    t_ras2ijk: cdt.AffineTransform
-    voxel_to_vertex_brain: scipy.sparse.spmatrix
-    voxel_to_vertex_scalp: scipy.sparse.spmatrix
-
-    # FIXME need to distinguish between ijk,  ijk+units == aligned == ras
-
-    @classmethod
-    def from_segmentation(
-        cls,
-        segmentation_dir: str,
-        mask_files: dict[str, str] = {
-            "csf": "csf.nii",
-            "gm": "gm.nii",
-            "scalp": "scalp.nii",
-            "skull": "skull.nii",
-            "wm": "wm.nii",
-        },
-        landmarks_ras_file: Optional[str] = None,
-        brain_seg_types: list[str] = ["gm", "wm"],
-        scalp_seg_types: list[str] = ["scalp"],
-        smoothing: float = 0.5,
-        brain_face_count: Optional[int] = 180000,
-        scalp_face_count: Optional[int] = 60000,
-        fill_holes: bool = True,
-    ) -> "TwoSurfaceHeadModel":
-        """Constructor from binary masks as gained from segmented MRI scans.
-
-        Args:
-            segmentation_dir (str): Folder containing the segmentation masks in NIFTI
-                format.
-            mask_files (Dict[str, str]): Dictionary mapping segmentation types to NIFTI
-                filenames.
-            landmarks_ras_file (Optional[str]): Filename of the landmarks in RAS space.
-            brain_seg_types (list[str]): List of segmentation types to be included in
-                the brain surface.
-            scalp_seg_types (list[str]): List of segmentation types to be included in
-                the scalp surface.
-            smoothing(float): Smoothing factor for the brain and scalp surfaces.
-            brain_face_count (Optional[int]): Number of faces for the brain surface.
-            scalp_face_count (Optional[int]): Number of faces for the scalp surface.
-            fill_holes (bool): Whether to fill holes in the segmentation masks.
-        """
-
-        # load segmentation mask
-        segmentation_masks, t_ijk2ras = cedalion.io.read_segmentation_masks(
-            segmentation_dir, mask_files
-        )
-
-        # inspect and invert ijk-to-ras transformation
-        t_ras2ijk = xrutils.pinv(t_ijk2ras)
-
-        # crs_ijk = t_ijk2ras.dims[1]
-        crs_ras = t_ijk2ras.dims[0]
-
-        # load landmarks. Other than the segmentation masks which are in voxel (ijk)
-        # space, these are already in RAS space.
-        if landmarks_ras_file is not None:
-            if not os.path.isabs(landmarks_ras_file):
-                landmarks_ras_file = os.path.join(segmentation_dir, landmarks_ras_file)
-
-            landmarks_ras = cedalion.io.read_mrk_json(landmarks_ras_file, crs=crs_ras)
-            landmarks_ijk = landmarks_ras.points.apply_transform(t_ras2ijk)
-        else:
-            landmarks_ijk = None
-
-        # derive surfaces from segmentation masks
-        brain_ijk = surface_from_segmentation(
-            segmentation_masks, brain_seg_types, fill_holes_in_mask=fill_holes
-        )
-
-        # we need the single outer surface from the scalp. The inner border between
-        # scalp and skull is not interesting here. Hence, all segmentation types are
-        # grouped together, yielding a uniformly filled head volume.
-        all_seg_types = segmentation_masks.segmentation_type.values
-        scalp_ijk = surface_from_segmentation(
-            segmentation_masks, all_seg_types, fill_holes_in_mask=fill_holes
-        )
-
-        # smooth surfaces
-        if smoothing > 0:
-            brain_ijk = brain_ijk.smooth(smoothing)
-            scalp_ijk = scalp_ijk.smooth(smoothing)
-
-        # reduce surface face counts
-        # use VTK's decimate_pro algorith as MNE's (VTK's) quadric decimation produced
-        # meshes on which Pycortex geodesic distance function failed.
-        if brain_face_count is not None:
-            # brain_ijk = brain_ijk.decimate(brain_face_count)
-            vtk_brain_ijk = cdc.VTKSurface.from_trimeshsurface(brain_ijk)
-            reduction = 1.0 - brain_face_count / brain_ijk.nfaces
-            vtk_brain_ijk = vtk_brain_ijk.decimate(reduction)
-            brain_ijk = cdc.TrimeshSurface.from_vtksurface(vtk_brain_ijk)
-
-        if scalp_face_count is not None:
-            # scalp_ijk = scalp_ijk.decimate(scalp_face_count)
-            vtk_scalp_ijk = cdc.VTKSurface.from_trimeshsurface(scalp_ijk)
-            reduction = 1.0 - scalp_face_count / scalp_ijk.nfaces
-            vtk_scalp_ijk = vtk_scalp_ijk.decimate(reduction)
-            scalp_ijk = cdc.TrimeshSurface.from_vtksurface(vtk_scalp_ijk)
-
-        brain_ijk = brain_ijk.fix_vertex_normals()
-        scalp_ijk = scalp_ijk.fix_vertex_normals()
-
-        brain_mask = segmentation_masks.sel(segmentation_type=brain_seg_types).any(
-            "segmentation_type"
-        )
-        scalp_mask = segmentation_masks.sel(segmentation_type=scalp_seg_types).any(
-            "segmentation_type"
-        )
-
-        voxel_to_vertex_brain = map_segmentation_mask_to_surface(
-            brain_mask, t_ijk2ras, brain_ijk.apply_transform(t_ijk2ras)
-        )
-        voxel_to_vertex_scalp = map_segmentation_mask_to_surface(
-            scalp_mask, t_ijk2ras, scalp_ijk.apply_transform(t_ijk2ras)
-        )
-
-        return cls(
-            segmentation_masks=segmentation_masks,
-            brain=brain_ijk,
-            scalp=scalp_ijk,
-            landmarks=landmarks_ijk,
-            t_ijk2ras=t_ijk2ras,
-            t_ras2ijk=t_ras2ijk,
-            voxel_to_vertex_brain=voxel_to_vertex_brain,
-            voxel_to_vertex_scalp=voxel_to_vertex_scalp,
-        )
-
-    @classmethod
-    def from_surfaces(
-        cls,
-        segmentation_dir: str,
-        mask_files: dict[str, str] = {
-            "csf": "csf.nii",
-            "gm": "gm.nii",
-            "scalp": "scalp.nii",
-            "skull": "skull.nii",
-            "wm": "wm.nii",
-        },
-        brain_surface_file: str = None,
-        scalp_surface_file: str = None,
-        landmarks_ras_file: Path | str | None = None,
-        brain_seg_types: list[str] = ["gm", "wm"],
-        scalp_seg_types: list[str] = ["scalp"],
-        smoothing: float = 0.5,
-        brain_face_count: int | None = 180000,
-        scalp_face_count: int | None = 60000,
-        fill_holes: bool = False,
-        parcel_file: Path | str | None = None,
-    ) -> "TwoSurfaceHeadModel":
-        """Constructor from seg.masks, brain and head surfaces as gained from MRI scans.
-
-        Args:
-            segmentation_dir (str): Folder containing the segmentation masks in NIFTI
-                format.
-            mask_files (dict[str, str]): Dictionary mapping segmentation types to NIFTI
-                filenames.
-            brain_surface_file (str): Path to the brain surface.
-            scalp_surface_file (str): Path to the scalp surface.
-            landmarks_ras_file (Optional[str]): Filename of the landmarks in RAS space.
-            brain_seg_types (list[str]): List of segmentation types to be included in
-                the brain surface.
-            scalp_seg_types (list[str]): List of segmentation types to be included in
-                the scalp surface.
-            smoothing (float): Smoothing factor for the brain and scalp surfaces.
-            brain_face_count (Optional[int]): Number of faces for the brain surface.
-            scalp_face_count (Optional[int]): Number of faces for the scalp surface.
-            fill_holes (bool): Whether to fill holes in the segmentation masks.
-            parcel_file: Path to parcel json file.
-
-        Returns:
-            TwoSurfaceHeadModel: An instance of the TwoSurfaceHeadModel class.
-        """
-
-        # load segmentation mask
-        segmentation_masks, t_ijk2ras = cedalion.io.read_segmentation_masks(
-            segmentation_dir, mask_files
-        )
-
-        # inspect and invert ijk-to-ras transformation
-        t_ras2ijk = xrutils.pinv(t_ijk2ras)
-
-        # crs_ijk = t_ijk2ras.dims[1]
-        crs_ras = t_ijk2ras.dims[0]
-
-        # load landmarks. Other than the segmentation masks which are in voxel (ijk)
-        # space, these are already in RAS space.
-        if landmarks_ras_file is not None:
-            if not os.path.isabs(landmarks_ras_file):
-                landmarks_ras_file = os.path.join(segmentation_dir, landmarks_ras_file)
-
-            landmarks_ras = cedalion.io.read_mrk_json(landmarks_ras_file, crs=crs_ras)
-            landmarks_ijk = landmarks_ras.points.apply_transform(t_ras2ijk)
-        else:
-            landmarks_ijk = None
-
-        # derive surfaces from segmentation masks
-        if brain_surface_file is not None:
-            brain_ijk = trimesh.load(brain_surface_file)
-            brain_ijk = cdc.TrimeshSurface(brain_ijk, 'ijk', cedalion.units.Unit("1"))
-        else:
-            brain_ijk = surface_from_segmentation(
-                segmentation_masks, brain_seg_types, fill_holes_in_mask=fill_holes
-            )
-        # we need the single outer surface from the scalp. The inner border between
-        # scalp and skull is not interesting here. Hence, all segmentation types are
-        # grouped together, yielding a uniformly filled head volume.
-
-        if scalp_surface_file is not None:
-            scalp_ijk = trimesh.load(scalp_surface_file)
-            scalp_ijk = cdc.TrimeshSurface(scalp_ijk, 'ijk', cedalion.units.Unit("1"))
-        else:
-            all_seg_types = segmentation_masks.segmentation_type.values
-            scalp_ijk = surface_from_segmentation(
-                segmentation_masks, all_seg_types, fill_holes_in_mask=fill_holes
-            )
-
-        # smooth surfaces
-        if smoothing > 0:
-            brain_ijk = brain_ijk.smooth(smoothing)
-            scalp_ijk = scalp_ijk.smooth(smoothing)
-
-        # reduce surface face counts
-        # use VTK's decimate_pro algorith as MNE's (VTK's) quadric decimation produced
-        # meshes on which Pycortex geodesic distance function failed.
-        if brain_face_count is not None:
-            # brain_ijk = brain_ijk.decimate(brain_face_count)
-            vtk_brain_ijk = cdc.VTKSurface.from_trimeshsurface(brain_ijk)
-            reduction = 1.0 - brain_face_count / brain_ijk.nfaces
-            vtk_brain_ijk = vtk_brain_ijk.decimate(reduction)
-            brain_ijk = cdc.TrimeshSurface.from_vtksurface(vtk_brain_ijk)
-
-        if scalp_face_count is not None:
-            # scalp_ijk = scalp_ijk.decimate(scalp_face_count)
-            vtk_scalp_ijk = cdc.VTKSurface.from_trimeshsurface(scalp_ijk)
-            reduction = 1.0 - scalp_face_count / scalp_ijk.nfaces
-            vtk_scalp_ijk = vtk_scalp_ijk.decimate(reduction)
-            scalp_ijk = cdc.TrimeshSurface.from_vtksurface(vtk_scalp_ijk)
-
-        brain_ijk = brain_ijk.fix_vertex_normals()
-        scalp_ijk = scalp_ijk.fix_vertex_normals()
-
-        brain_mask = segmentation_masks.sel(segmentation_type=brain_seg_types).any(
-            "segmentation_type"
-        )
-        scalp_mask = segmentation_masks.sel(segmentation_type=scalp_seg_types).any(
-            "segmentation_type"
-        )
-
-        voxel_to_vertex_brain = map_segmentation_mask_to_surface(
-            brain_mask, t_ijk2ras, brain_ijk.apply_transform(t_ijk2ras)
-        )
-        voxel_to_vertex_scalp = map_segmentation_mask_to_surface(
-            scalp_mask, t_ijk2ras, scalp_ijk.apply_transform(t_ijk2ras)
-        )
-
-        # load parcellations
-        if parcel_file is not None:
-            parcels = cedalion.io.read_parcellations(parcel_file)
-            assert len(parcels) == brain_ijk.nvertices
-            brain_ijk.vertex_coords["parcel"] = np.asarray(parcels.Label.tolist())
-
-
-        return cls(
-            segmentation_masks=segmentation_masks,
-            brain=brain_ijk,
-            scalp=scalp_ijk,
-            landmarks=landmarks_ijk,
-            t_ijk2ras=t_ijk2ras,
-            t_ras2ijk=t_ras2ijk,
-            voxel_to_vertex_brain=voxel_to_vertex_brain,
-            voxel_to_vertex_scalp=voxel_to_vertex_scalp,
-        )
-
-    @property
-    def crs(self):
-        """Coordinate reference system of the head model."""
-        assert self.brain.crs == self.scalp.crs
-        if self.landmarks is not None:
-            assert self.scalp.crs == self.landmarks.points.crs
-        return self.brain.crs
-
-    def apply_transform(self, transform: cdt.AffineTransform) -> "TwoSurfaceHeadModel":
-        """Apply a coordinate transformation to the head model.
-
-        Args:
-            transform : Affine transformation matrix (4x4) to be applied.
-
-        Returns:
-            Transformed head model.
-        """
-
-        brain = self.brain.apply_transform(transform)
-        scalp = self.scalp.apply_transform(transform)
-        landmarks = self.landmarks.points.apply_transform(transform) \
-                    if self.landmarks is not None else None
-
-        return TwoSurfaceHeadModel(
-            segmentation_masks=self.segmentation_masks,
-            brain=brain,
-            scalp=scalp,
-            landmarks=landmarks,
-            t_ijk2ras=self.t_ijk2ras,
-            t_ras2ijk=self.t_ras2ijk,
-            voxel_to_vertex_brain=self.voxel_to_vertex_brain,
-            voxel_to_vertex_scalp=self.voxel_to_vertex_scalp,
-        )
-
-    def save(self, foldername: str):
-        """Save the head model to a folder.
-
-        Args:
-            foldername (str): Folder to save the head model into.
-
-        Returns:
-            None
-        """
-
-        # Add foldername if not existing
-        if ((not os.path.exists(foldername)) or \
-            (not os.path.isdir(foldername))):
-            os.mkdir(foldername)
-
-        # Save all head model attributes to folder
-        self.segmentation_masks.to_netcdf(os.path.join(foldername,
-                                                       "segmentation_masks.nc"))
-        self.brain.mesh.export(os.path.join(foldername, "brain.ply"),
-                                            file_type="ply")
-        self.scalp.mesh.export(os.path.join(foldername, "scalp.ply"),
-                                            file_type="ply")
-        if self.landmarks is not None:
-            self.landmarks.drop_vars("type").to_netcdf(
-                os.path.join(foldername, "landmarks.nc")
-            )
-        self.t_ijk2ras.to_netcdf(os.path.join(foldername, "t_ijk2ras.nc"))
-        self.t_ras2ijk.to_netcdf(os.path.join(foldername, "t_ras2ijk.nc"))
-        scipy.sparse.save_npz(os.path.join(foldername, "voxel_to_vertex_brain.npz"),
-                                           self.voxel_to_vertex_brain)
-        scipy.sparse.save_npz(os.path.join(foldername, "voxel_to_vertex_scalp.npz"),
-                                           self.voxel_to_vertex_scalp)
-        return
-
-    @classmethod
-    def load(cls, foldername: str):
-        """Load the head model from a folder.
-
-        Args:
-            foldername (str): Folder to load the head model from.
-
-        Returns:
-            TwoSurfaceHeadModel: Loaded head model.
-        """
-
-        # Check if all files exist
-        for fn in ["segmentation_masks.nc", "brain.ply", "scalp.ply",
-                   "t_ijk2ras.nc", "t_ras2ijk.nc", "voxel_to_vertex_brain.npz",
-                   "voxel_to_vertex_scalp.npz"]:
-            if not os.path.exists(os.path.join(foldername, fn)):
-                raise ValueError("%s does not exist." % os.path.join(foldername, fn))
-
-        # Load all attributes from folder
-        segmentation_masks = xr.load_dataarray(
-            os.path.join(foldername, "segmentation_masks.nc")
-        )
-        brain =  trimesh.load(os.path.join(foldername, 'brain.ply'), process=False)
-        scalp =  trimesh.load(os.path.join(foldername, 'scalp.ply'), process=False)
-        if os.path.exists(os.path.join(foldername, 'landmarks.nc')):
-            landmarks_ijk = xr.load_dataset(os.path.join(foldername, 'landmarks.nc'))
-            landmarks_ijk = xr.DataArray(
-                landmarks_ijk.to_array()[0],
-                coords={
-                    "label": ("label", landmarks_ijk.label.values),
-                    "type": (
-                        "label",
-                        [cdc.PointType.LANDMARK] * len(landmarks_ijk.label),
-                    ),
-                },
-            )
-        else:
-            landmarks_ijk = None
-        t_ijk2ras = xr.load_dataarray(os.path.join(foldername, 't_ijk2ras.nc'))
-        t_ras2ijk = xr.load_dataarray(os.path.join(foldername, 't_ras2ijk.nc'))
-        voxel_to_vertex_brain = scipy.sparse.load_npz(os.path.join(foldername,
-                                                     'voxel_to_vertex_brain.npz'))
-        voxel_to_vertex_scalp = scipy.sparse.load_npz(os.path.join(foldername,
-                                                      'voxel_to_vertex_scalp.npz'))
-
-        # Construct TwoSurfaceHeadModel
-        brain_ijk = cdc.TrimeshSurface(brain, 'ijk', cedalion.units.Unit("1"))
-        scalp_ijk = cdc.TrimeshSurface(scalp, 'ijk', cedalion.units.Unit("1"))
-        t_ijk2ras = cdc.affine_transform_from_numpy(
-            np.array(t_ijk2ras), "ijk", "unknown", "1", "mm"
-        )
-        t_ras2ijk = xrutils.pinv(t_ijk2ras)
-
-        return cls(
-            segmentation_masks=segmentation_masks,
-            brain=brain_ijk,
-            scalp=scalp_ijk,
-            landmarks=landmarks_ijk,
-            t_ijk2ras=t_ijk2ras,
-            t_ras2ijk=t_ras2ijk,
-            voxel_to_vertex_brain=voxel_to_vertex_brain,
-            voxel_to_vertex_scalp=voxel_to_vertex_scalp,
-        )
-
-
-    # FIXME maybe this should not be in this class, especially since the
-    # algorithm is not good.
-    @cdc.validate_schemas
-    def align_and_snap_to_scalp(
-        self,
-        points: cdt.LabeledPointCloud,
-        mode: str = "trans_rot_isoscale",
-    ) -> cdt.LabeledPointCloud:
-        """Align and snap optodes or points to the scalp surface.
-
-        Args:
-            points (cdt.LabeledPointCloud): Points to be aligned and snapped to the
-                scalp surface.
-            mode: method to derive the affine transform. Could be either
-                'trans_rot_isoscale' or 'general'. See cedalion.geometry.registraion
-                for details.
-
-        Returns:
-            cdt.LabeledPointCloud: Points aligned and snapped to the scalp surface.
-        """
-
-        assert self.landmarks is not None, "Please add landmarks in RAS to head \
-                                            instance."
-        if mode == "trans_rot_isoscale":
-            t = register_trans_rot_isoscale(self.landmarks, points)
-        elif mode == "general":
-            t = register_general_affine(self.landmarks, points)
-        else:
-            raise ValueError(f"unexpected mode '{mode}'")
-
-        transformed = points.points.apply_transform(t)
-        snapped = self.scalp.snap(transformed)
-        return snapped
-
-
-    # FIXME then maybe this should also not be in this class
-    @cdc.validate_schemas
-    def snap_to_scalp_voxels(
-        self, points: cdt.LabeledPointCloud
-    ) -> cdt.LabeledPointCloud:
-        """Snap optodes or points to the closest scalp voxel.
-
-        Args:
-            points (cdt.LabeledPointCloud): Points to be snapped to the closest scalp
-                voxel.
-
-        Returns:
-            cdt.LabeledPointCloud: Points aligned and snapped to the closest scalp
-                voxel.
-        """
-        # Align to scalp surface
-        aligned = self.scalp.snap(points)
-
-        # Snap to closest scalp voxel
-        snapped = np.zeros(points.shape)
-        for i, a in enumerate(aligned):
-
-            # Get index of scalp surface vertex "a"
-            idx = np.argwhere(self.scalp.mesh.vertices == \
-                              np.array(a.pint.dequantify()))
-
-            # Reduce to indices with repitition of 3 (so all coordinates match)
-            if len(idx) > 3:
-                r = [rep[n] for rep in [{}] for i,n in enumerate(idx[:,0]) \
-                           if rep.setdefault(n,[]).append(i) or len(rep[n])==3]
-                idx = idx[r[0]]
-
-            # Make sure only one vertex is found
-            assert len(idx) == 3
-            assert idx[0,0] == idx[1,0] == idx[2,0]
-
-            # Get voxel indices mapping to this scalp vertex
-            vec = np.zeros(self.scalp.nvertices)
-            vec[idx[0,0]] = 1
-            voxel_idx = np.argwhere(self.voxel_to_vertex_scalp @ vec == 1)[:,0]
-
-            if len(voxel_idx) > 0:
-                # Get voxel coordinates from voxel indices
-                try:
-                    shape = self.segmentation_masks.shape[-3:]
-                except AttributeError: # FIXME should not be handled here
-                    shape = self.segmentation_masks.to_dataarray().shape[-3:]
-                voxels = np.array(np.unravel_index(voxel_idx, shape)).T
-
-                # Choose the closest voxel
-                dist = np.linalg.norm(voxels - np.array(a.pint.dequantify()), axis=1)
-                voxel_idx = np.argmin(dist)
-
-            else:
-                # If no voxel maps to that scalp surface vertex,
-                # simply choose the closest of all scalp voxels
-
-                sm = self.segmentation_masks
-
-                voxels = voxels_from_segmentation(sm, ["scalp"]).voxels
-                if len(voxels) == 0:
-                    try:
-                        scalp_mask = sm.sel(segmentation_type="scalp").to_dataarray()
-                    except AttributeError: # FIXME same as above
-                        scalp_mask = sm.sel(segmentation_type="scalp")
-                    voxels = np.argwhere(np.array(scalp_mask)[0] > 0.99)
-
-                kdtree = KDTree(voxels)
-                dist, voxel_idx = kdtree.query(self.scalp.mesh.vertices[idx[0,0]],
-                                               workers=-1)
-
-            # Snap to closest scalp voxel
-            snapped[i] = voxels[voxel_idx]
-
-        points.values = snapped
-        return points
 
 
 class ForwardModel:
@@ -622,7 +45,7 @@ class ForwardModel:
     Args:
     head_model (TwoSurfaceHeadModel): Head model containing voxel projections to brain
         and scalp surfaces.
-    optode_pos (cdt.LabeledPointCloud): Optode positions.
+    optode_pos (cdt.LabeledPoints): Optode positions.
     optode_dir (xr.DataArray): Optode orientations (directions of light beams).
     tissue_properties (xr.DataArray): Tissue properties for each tissue type.
     volume (xr.DataArray): Voxelated head volume from segmentation masks.
@@ -640,7 +63,7 @@ class ForwardModel:
     def __init__(
         self,
         head_model: TwoSurfaceHeadModel,
-        geo3d: cdt.LabeledPointCloud,
+        geo3d: cdt.LabeledPoints,
         measurement_list: pd.DataFrame,
     ):
         """Constructor for the forward model.
@@ -648,7 +71,7 @@ class ForwardModel:
         Args:
             head_model (TwoSurfaceHeadModel): Head model containing voxel projections to
                 brain and scalp surfaces.
-            geo3d (cdt.LabeledPointCloud): Optode positions and directions.
+            geo3d (cdt.LabeledPoints): Optode positions and directions.
             measurement_list (pd.DataFrame): List of measurements of experiment with
                 source, detector, channel and wavelength.
         """
@@ -657,6 +80,7 @@ class ForwardModel:
         assert head_model.crs == geo3d.points.crs
 
         self.head_model = head_model
+        self.measurement_list = measurement_list
 
         self.optode_pos = geo3d[
             geo3d.type.isin([cdc.PointType.SOURCE, cdc.PointType.DETECTOR])
@@ -677,14 +101,27 @@ class ForwardModel:
         self.optode_dir = self.optode_dir.pint.dequantify()
 
         self.tissue_properties = get_tissue_properties(
-            self.head_model.segmentation_masks
+            self.head_model.segmentation_masks,
+            self.measurement_list.wavelength.unique(),
         )
 
         self.volume = self.head_model.segmentation_masks.sum("segmentation_type")
         self.volume = self.volume.values.astype(np.uint8)
         self.unitinmm = self._get_unitinmm()
 
-        self.measurement_list = measurement_list
+    def _get_voxel_dimensions(self) -> pint.Quantity:
+        """Calculate the x,y and z voxel dimensions in scanner space.
+
+        Returns:
+            A quantified array [dx,dy,dz].
+        """
+
+        pts = cdc.build_labeled_points(
+            [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], crs="ijk", units="1"
+        )
+        pts_ras = pts.points.apply_transform(self.head_model.t_ijk2ras)
+        return xrutils.norm(pts_ras[1:] - pts_ras[0], pts_ras.points.crs).data
+
 
     def _get_unitinmm(self):
         """Calculate length of volume grid cells.
@@ -693,16 +130,19 @@ class ForwardModel:
         relate to physical distances pmcx needs the 'unitinmm' parameter.
         """
 
-        pts = cdc.build_labeled_points([[0, 0, 0], [0, 0, 1]], crs="ijk", units="1")
-        pts_ras = pts.points.apply_transform(self.head_model.t_ijk2ras)
-        length = xrutils.norm(pts_ras[1] - pts_ras[0], pts_ras.points.crs)
-        return length.pint.magnitude.item()
+        # FIXME when scaling head models voxels may have different lengths in different
+        # dimensions. MCX assumes cubical voxels with dimension unitinmm.
+        # Report an edge length  that matches the voxel volume when cubed.
+        voxel_dims = self._get_voxel_dimensions().to("mm").magnitude
+        return np.prod(voxel_dims)**(1/3)
 
-    def _get_fluence_from_mcx(self, i_optode: int, **kwargs) -> np.ndarray:
+
+    def _get_fluence_from_mcx(self, i_optode: int, i_wl: int=0, **kwargs) -> np.ndarray:
         """Run MCX simulation to get fluence for one optode.
 
         Args:
             i_optode: Index of the optode.
+            i_wl: Index of the wavelength.
             **kwargs: Additional keywords are passed to MCX's configuration dict.
 
         Returns:
@@ -720,7 +160,7 @@ class ForwardModel:
             "tstep": 5e-9,
             "srcpos": self.optode_pos.values[i_optode],
             "srcdir": self.optode_dir.values[i_optode],
-            "prop": self.tissue_properties,
+            "prop": self.tissue_properties[:,:,i_wl],
             "issrcfrom0": 1,
             "isnormalized": 1,
             "outputtype": "fluence", # units: 1/mm^2
@@ -877,6 +317,13 @@ class ForwardModel:
             Communications in numerical methods in engineering 25.6 (2009): 711-732.
         """
 
+        if self._get_unitinmm() != 1.:
+            warn(
+                "The current NIRFASTer implementation assumes a voxel volume of 1mm^3, "
+                "but the voxel size of this head model is "
+                + f"{self._get_voxel_dimensions().to('mm').magnitude} mm."
+            )
+
         # FIXME
         src_path = os.path.abspath(
             os.path.join(
@@ -909,11 +356,12 @@ class ForwardModel:
         mesh = ff.base.stndmesh()
         # make the optical property matrix; unit in mm-1
         tissueprop = np.zeros((self.tissue_properties.shape[0]-1, 4))
+        i_wl = 0 # FIXME
         for i in range(tissueprop.shape[0]):
             tissueprop[i,0] = i+1
-            tissueprop[i,1] = self.tissue_properties[i+1, 0]
-            tissueprop[i,2] = self.tissue_properties[i+1, 1] * (1-self.tissue_properties[i+1, 2]) # noqa: E501
-            tissueprop[i,3] = self.tissue_properties[i+1, 3]
+            tissueprop[i,1] = self.tissue_properties[i+1, 0, i_wl]
+            tissueprop[i,2] = self.tissue_properties[i+1, 1, i_wl] * (1-self.tissue_properties[i+1, 2, i_wl]) # noqa: E501
+            tissueprop[i,3] = self.tissue_properties[i+1, 3, i_wl]
 
         # all optodes x all optodes
         sources = ff.base.optode(coord=self.optode_pos.data)
@@ -1063,7 +511,8 @@ class ForwardModel:
         # However, this part of the computation and the fluence normalization in the
         # different forward models need further testing. Hence, for the moment and for
         # different voxel sizes a warning is issued.
-        Adot *= self._get_unitinmm()**3
+
+        Adot *= np.prod(self._get_voxel_dimensions().to("mm")).magnitude
 
         if self._get_unitinmm() != 1:
             warnings.warn("voxel size is not 1 mm^3. Check Adot normalization.")
@@ -1093,63 +542,89 @@ class ForwardModel:
         save_Adot(sensitivity_fname, Adot)
 
 
-    # FIXME: better name for Adot * ext. coeffs
-    # FIXME: hardcoded for 2 chromophores (HbO and HbR) and wavelengths
-    @staticmethod
-    def compute_stacked_sensitivity(sensitivity: xr.DataArray):
-        """Compute stacked HbO and HbR sensitivity matrices from fluence.
+    def compute_stacked_sensitivity(
+        sensitivity: xr.DataArray, spectrum: str = "prahl"
+    ) -> xr.DataArray:
+        """Stack sensitivity matrices and incorporate extinction coefficients.
+
+        For image reconstruction the 3D sensitivity arrays must be transformed into
+        invertible 2D matrices and extinction coefficients must be incorporated.
+        This function accepts sensitivities both in image space (Adot, vertices) or in
+        spatial basis function space (H, kernels). The dimensions get transformed from
+        (channel, vertex) to (flat_channel, flat_vertex) or (channel, kernel) to
+        (flat_channel, flat_kernel), respectively.
 
         Args:
-            sensitivity (xr.DataArray): Sensitivity matrix for each vertex and
+            sensitivity: Sensitivity matrix (Adot/H ) for each vertex/kernel and
                 wavelength.
+            spectrum: name of the extinction coefficient spectrum
 
         Returns:
-            xr.DataArray: Stacked sensitivity matrix for each channel and vertex.
+            Stacked sensitivity matrix for each channel and vertex.
+            shape = (flat_channel, flat_vertex)
         """
 
         assert "wavelength" in sensitivity.dims
         wavelengths = sensitivity.wavelength.values
-        assert len(wavelengths) == 2
 
         if "units" in sensitivity.attrs:
             units_sens = pint.Unit(sensitivity.attrs["units"])
         else:
             units_sens = pint.Unit("mm")
 
-        ec = cedalion.nirs.get_extinction_coefficients("prahl", wavelengths)
+        ec = cedalion.nirs.get_extinction_coefficients(spectrum, wavelengths)
 
         units_ec = ec.pint.units
         ec = ec.pint.dequantify()
 
         units_A = units_sens * units_ec
 
-        nchannel = sensitivity.sizes["channel"]
-        nvertices = sensitivity.sizes["vertex"]
-        A = np.zeros((2 * nchannel, 2 * nvertices))
+        if "vertex" in sensitivity.dims:
+            vertex_dim = "vertex"
+            flat_vertex_dim = "flat_vertex"
+            vertex_coords = sensitivity.vertex.values
+        elif "kernel" in sensitivity.dims:
+            vertex_dim = "kernel"
+            flat_vertex_dim = "flat_kernel"
+            vertex_coords = sensitivity.kernel.values
+        else:
+            raise ValueError("sensitivity must have vertex or kernel dimension.")
 
-        wl1, wl2 = wavelengths
+
+        nchannel = sensitivity.sizes["channel"]
+        nvertices = sensitivity.sizes[vertex_dim]
+        nwavelengths = len(wavelengths)
+        chromos = ec.chromo.values
+        nchromos = len(chromos)
+
+        A = np.zeros((nwavelengths * nchannel, nchromos * nvertices))
+
         # fmt: off
-        A[:nchannel, :nvertices] = ec.sel(chromo="HbO", wavelength=wl1).values * sensitivity.sel(wavelength=wl1) # noqa: E501
-        A[:nchannel, nvertices:] = ec.sel(chromo="HbR", wavelength=wl1).values * sensitivity.sel(wavelength=wl1) # noqa: E501
-        A[nchannel:, :nvertices] = ec.sel(chromo="HbO", wavelength=wl2).values * sensitivity.sel(wavelength=wl2) # noqa: E501
-        A[nchannel:, nvertices:] = ec.sel(chromo="HbR", wavelength=wl2).values * sensitivity.sel(wavelength=wl2) # noqa: E501
+        for i_wl, wl in enumerate(wavelengths):
+            for i_ch, chromo in enumerate(chromos):
+                c0 = i_wl * nchannel
+                c1 = (i_wl + 1) * nchannel
+                v0 = i_ch * nvertices
+                v1 = (i_ch + 1) * nvertices
+
+                A[c0:c1, v0:v1] = ec.sel(chromo=chromo, wavelength=wl).values * sensitivity.sel(wavelength=wl)  # noqa: E501
         # fmt: on
 
-        is_brain = np.hstack([sensitivity.is_brain, sensitivity.is_brain])
-        flat_chromo = ["HbO"] * nvertices + ["HbR"] * nvertices
-        flat_wavelength = [wl1] * nchannel + [wl2] * nchannel
+        is_brain = np.hstack([sensitivity.is_brain] * nchromos)
+        flat_chromo = [ch for ch in chromos for _ in range(nvertices)]
+        flat_wavelength = [wl for wl in wavelengths for _ in range(nchannel)]
         channel = sensitivity.channel.values
         source = sensitivity.source.values
         detector = sensitivity.detector.values
-        flat_channel = np.hstack((channel, channel))
-        flat_source = np.hstack((source, source))
-        flat_detector = np.hstack((detector, detector))
-        vertex = np.hstack([np.arange(nvertices), np.arange(nvertices)])
+        flat_channel = np.hstack([channel] * nwavelengths)
+        flat_source = np.hstack([source] * nwavelengths)
+        flat_detector = np.hstack([detector] * nwavelengths)
+        flat_vertex_coords = np.hstack([vertex_coords] * nchromos)
 
         coords = {
-            "is_brain": ("flat_vertex", is_brain),
-            "chromo": ("flat_vertex", flat_chromo),
-            "vertex": ("flat_vertex", vertex),
+            "is_brain": (flat_vertex_dim, is_brain),
+            "chromo": (flat_vertex_dim, flat_chromo),
+            vertex_dim: (flat_vertex_dim, flat_vertex_coords),
             "wavelength": ("flat_channel", flat_wavelength),
             "channel": ("flat_channel", flat_channel),
             "source": ("flat_channel", flat_source),
@@ -1157,12 +632,12 @@ class ForwardModel:
         }
 
         if "parcel" in sensitivity.coords:
-            parcels = np.hstack([sensitivity.parcel.values, sensitivity.parcel.values])
-            coords["parcel"] = ("flat_vertex", parcels)
+            flat_parcels = np.hstack([sensitivity.parcel.values] * nchromos)
+            coords["parcel"] = (flat_vertex_dim, flat_parcels)
 
         A = xr.DataArray(
             A,
-            dims=("flat_channel", "flat_vertex"),
+            dims=("flat_channel", flat_vertex_dim),
             coords=coords,
             attrs={"units": str(units_A)},
         )
@@ -1388,3 +863,34 @@ def stack_flat_channel(array: xr.DataArray):
 def unstack_flat_channel(array: xr.DataArray):
     return xrutils.unstack(array, "flat_channel", ("wavelength", "channel"))
 
+
+def image_to_channel_space(
+    Adot: xr.DataArray, img: xr.DataArray, spectrum: str | None = None
+):
+    common_dim = set(Adot.dims) & set (img.dims)
+    assert len(common_dim) == 1
+    common_dim = next(iter(common_dim))
+    assert common_dim == "vertex" # FIXME generalize?
+
+    if xrutils.check_units(img, "[concentration]"):
+        if spectrum is None:
+            raise ValueError("You must specify 'spectrum' if img is a concentration.")
+
+        img = img.pint.quantify()
+
+        Adot_stacked = ForwardModel.compute_stacked_sensitivity(Adot, spectrum)
+        Adot_stacked = Adot_stacked.pint.quantify()
+        img_stacked = stack_flat_vertex(img)
+
+        return unstack_flat_channel(
+            xrutils.contract(
+                Adot_stacked, img_stacked, dim="flat_vertex"
+            )  # FIXME generalize?
+        )
+    elif xrutils.check_units(img, "[1/length]"):
+        Adot = Adot.pint.quantify()
+        img = img.pint.quantify()
+
+        xrutils.contract(Adot_stacked, img_stacked, dim=common_dim)
+    else:
+        raise ValueError("img must be a quantified concentration ")

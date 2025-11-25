@@ -1030,18 +1030,36 @@ def _write_recordings(snirf_file: Snirf, rec: cdc.Recording):
     geo2d = rec.geo2d.pint.dequantify()
     ne.metaDataTags.LengthUnit = geo3d.attrs["units"]
 
+    if len(geo3d) > 0:
+        src_labels = geo3d[geo3d.type == cdc.PointType.SOURCE].label.values.tolist()
+        det_labels = geo3d[geo3d.type == cdc.PointType.DETECTOR].label.values.tolist()
+        lm_labels = geo3d[geo3d.type == cdc.PointType.LANDMARK].label.values.tolist()
+    else:
+        src_labels = rec.source_labels
+        det_labels = rec.detector_labels
+        lm_labels = None
+
+    wavelengths = rec.wavelengths
+
     # probe information
-    ne.probe.sourceLabels = rec.source_labels
-    ne.probe.detectorLabels = rec.detector_labels
-    ne.probe.wavelengths = rec.wavelengths
+    ne.probe.sourceLabels = src_labels
+    ne.probe.detectorLabels = det_labels
+    ne.probe.landmarkLabels = lm_labels
+    ne.probe.wavelengths = wavelengths
 
     if len(geo3d) > 0:
-        ne.probe.sourcePos3D = geo3d.loc[rec.source_labels]
-        ne.probe.detectorPos3D = geo3d.loc[rec.detector_labels]
+        ne.probe.sourcePos3D = geo3d.loc[src_labels]
+        ne.probe.detectorPos3D = geo3d.loc[det_labels]
+        ne.probe.landmarkPos3D = geo3d.loc[lm_labels]
 
     if len(geo2d) > 0:
-        ne.probe.sourcePos2D = geo2d.loc[rec.source_labels]
-        ne.probe.detectorPos2D = geo2d.loc[rec.detector_labels]
+        src_labels2D = geo2d[geo2d.type == cdc.PointType.SOURCE].label.values.tolist()
+        det_labels2D = geo2d[geo2d.type == cdc.PointType.DETECTOR].label.values.tolist()
+        lm_labels2D = geo2d[geo2d.type == cdc.PointType.LANDMARK].label.values.tolist()
+
+        ne.probe.sourcePos2D = geo2d.loc[src_labels2D]
+        ne.probe.detectorPos2D = geo2d.loc[det_labels2D]
+        ne.probe.landmarkPos2D = geo2d.loc[lm_labels2D]
 
     trial_types = list(rec.stim["trial_type"].drop_duplicates())
 
@@ -1095,9 +1113,9 @@ def _write_recordings(snirf_file: Snirf, rec: cdc.Recording):
             stacked_array,
             data_type,
             trial_types,
-            source_labels=rec.source_labels,
-            detector_labels=rec.detector_labels,
-            wavelengths=rec.wavelengths,
+            source_labels=src_labels,
+            detector_labels=det_labels,
+            wavelengths=wavelengths,
         )
 
         # create and populate data element

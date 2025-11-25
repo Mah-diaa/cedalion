@@ -16,8 +16,7 @@ import matplotlib.pyplot as p
 from matplotlib.colors import ListedColormap
 import pyvista as pv
 
-import cedalion
-import cedalion.plots
+import cedalion.vis.blocks as vbx
 import cedalion.dataclasses as cdc
 
 
@@ -41,9 +40,9 @@ class Main:
 
     def plot(self, low_th=-3, high_th=0):
         if self.head is not None:
-            cedalion.plots.plot_surface(self.plt, self.head, opacity=0.1)
+            vbx.plot_surface(self.plt, self.head, opacity=0.1)
         if self.labeled_points is not None:
-            cedalion.plots.plot_labeled_points(self.plt, self.labeled_points)
+            vbx.plot_labeled_points(self.plt, self.labeled_points)
 
         b = cdc.VTKSurface.from_trimeshsurface(self.brain)
         b = pv.wrap(b.mesh)
