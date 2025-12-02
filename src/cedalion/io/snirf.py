@@ -818,6 +818,15 @@ def read_nirs_element(nirs_element, opts):
         df_ml = denormalize_measurement_list(df_ml, nirs_element)
         df_ml.dropna(axis=1)
 
+        if data_element.dataTimeSeries is None:
+            # data element with only a measurement list but no time series
+            # store the measurement list under key 'unknown'
+            name = "unknown"
+            if name in measurement_lists:
+                name = add_number_to_name(name, measurement_lists.keys())
+            measurement_lists[name] = df_ml
+            continue
+
         for name, ts in read_data_elements(data_element, nirs_element, stim):
             if name in timeseries:
                 name = add_number_to_name(name, timeseries.keys())
