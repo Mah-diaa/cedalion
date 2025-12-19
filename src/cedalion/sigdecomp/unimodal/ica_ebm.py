@@ -1,7 +1,9 @@
-"""Independent Component Analysis by Entropy Bound Minimization (ICA-EBM) based on :cite:t:`Li2010A`.
-This code is based on converted matlab versions provided by the MLSP Lab at the University of Maryland, 
-which is available here: https://mlsp.umbc.edu/resources.html.
-"""  # noqa: D205
+"""Independent Component Analysis by Entropy Bound Minimization (ICA-EBM).
+
+This code is based on :cite:t:`Li2010A` and converted matlab versions provided by the
+MLSP Lab at the University of Maryland, which is available here:
+https://mlsp.umbc.edu/resources.html.
+"""
 
 import numpy as np
 import cedalion.data
@@ -15,26 +17,29 @@ def ICA_EBM(X: np.ndarray) -> np.ndarray:
     are used for entropy bound calculation
 
     Args:
-        X (np.ndarray, (Channels, Time Points)): the [N x T] input multivariate time series with dimensionality N observations/channels and T time points
+        X (np.ndarray, (Channels, Time Points)): the [N x T] input multivariate time
+            series with dimensionality N observations/channels and T time points
 
     Returns:
-        W (np.ndarray, (Channels, Channels)): the [N x N] demixing matrix with weights for  N channels/sources. 
-            To obtain the independent components, the demixed signals can be calculated as S = W @ X.
+        W (np.ndarray, (Channels, Channels)): the [N x N] demixing matrix with weights
+            for  N channels/sources. To obtain the independent components, the demixed
+            signals can be calculated as S = W @ X.
 
     Initial Contributors:
         - Jacqueline Behrendt | jacqueline.behrendt@campus.tu-berlin.de | 2024
 
     References:
-        This code is based on the matlab version by Xi-Lin Li (:cite:t:`Li2010A`)
-        Xi-Lin Li and Tulay Adali, "Independent component analysis by entropy bound minimization," 
-        IEEE Trans. Signal Processing, vol. 58, no. 10, pp. 5151-5164, Oct. 2010.
-        The original matlab version is available at https://mlsp.umbc.edu/resources.html
-        under the name "Real-valued ICA by entropy rate bound minimization (ICA-ERBM)"
+        This code is based on the matlab version by Xi-Lin Li (:cite:t:`Li2010A`) Xi-Lin
+        Li and Tulay Adali, "Independent component analysis by entropy bound
+        minimization," IEEE Trans. Signal Processing, vol. 58, no. 10, pp. 5151-5164,
+        Oct. 2010. The original matlab version is available at
+        https://mlsp.umbc.edu/resources.html under the name "Real-valued ICA by entropy
+        rate bound minimization (ICA-ERBM)"
     """
 
-    ###############################################################################################################
+    ####################################################################################
     # Part 0: Preprocessing
-    ###############################################################################################################
+    ####################################################################################
     max_iter_fastica = 100
     max_iter_orth = 1000
     max_iter_orth_refine = 1000
@@ -45,8 +50,11 @@ def ICA_EBM(X: np.ndarray) -> np.ndarray:
     stochastic_search_factor = 1
     eps = np.finfo(np.float64).eps
 
-    verbose = False       # report the progress if verbose== True
-    show_cost = False    # show the cost values vs. iterations at each stage if show_cost== True  - not implemented yet
+    verbose = False  # report the progress if verbose== True
+
+    # show the cost values vs. iterations at each stage if show_cost== True
+    # not implemented yet
+    show_cost = False
 
     # Load 8 measuring functions. But we only use 4 of them.
     K = 8
@@ -56,7 +64,9 @@ def ICA_EBM(X: np.ndarray) -> np.ndarray:
     file_path = cedalion.data.get("measfunc_table.npy")
     table = np.load(file_path, allow_pickle=True)
 
-    nf1, nf2, nf3, nf4, nf5, nf6, nf7, nf8 = table[0], table[1], table[2], table[3], table[4], table[5], table[6], table[7]
+    nf1, nf2, nf3, nf4, nf5, nf6, nf7, nf8 = (
+        table[0], table[1], table[2], table[3], table[4], table[5], table[6], table[7]
+    )
 
 
     N = X.shape[0]

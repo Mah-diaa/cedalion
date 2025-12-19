@@ -10,6 +10,7 @@
 - Added `cedalion.xrutils.dot_dataarray_csr` for matrix products between `xr.DataArray` 
   and `scipy.sparse` arrays, by [Eike Middell](https://github.com/emiddell).
 ### Changed
+- The ICA-EBM and ICA_ERBM implementations were moved into `cedalion.sigdecomp.unimodal`.
 - The class `cedalion.dot.ForwardModel` accepts also head models that are not in 
 voxel space. They will be transformed to voxel space internally.
 - Refactored `cedalion.plots` into `cedalion.vis` and its subpackages. This cleans up the code structure and should help with discovering existing functions. The package `cedalion.vis.blocks` emphasizes building blocks for larger visualizations. Please refer to `examples/plots_visualization/12_plots_example.ipynb` to get an overview. Importing `cedalion.plots` will throw a deprecation warning to trigger adoption. By [Eike Middell](https://github.com/emiddell).
