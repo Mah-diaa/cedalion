@@ -10,6 +10,7 @@
 - Added `cedalion.xrutils.dot_dataarray_csr` for matrix products between `xr.DataArray` 
   and `scipy.sparse` arrays, by [Eike Middell](https://github.com/emiddell).
 ### Changed
+- The package `cedalion.sigproc.motion_correct` was renamed to `cedalion.sigproc.motion`.
 - The ICA-EBM and ICA_ERBM implementations were moved into `cedalion.sigdecomp.unimodal`.
 - The class `cedalion.dot.ForwardModel` accepts also head models that are not in 
 voxel space. They will be transformed to voxel space internally.
