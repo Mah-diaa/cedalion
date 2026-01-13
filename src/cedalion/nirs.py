@@ -185,13 +185,14 @@ def od2conc(
     dists = channel_distances(od, geo3d)
     dists = dists.pint.to("mm")
 
-    # conc = Einv @ (optical_density / ( dists * dpf))
     if dpf[0] != 1:
         conc = xr.dot(Einv, od / (dists * dpf), dim=["wavelength"])
-    else:
-        conc = xr.dot(Einv, od / (dpf * 1*units.mm), dim=["wavelength"])
+        conc = conc.pint.to("molar")
 
-    conc = conc.pint.to("micromolar")
+    else:
+        conc = xr.dot(Einv, od , dim=["wavelength"])
+        conc = conc.pint.to("molar * mm")
+
     conc = conc.pint.quantify({"time": od.time.attrs["units"]})  # got lost in xr.dot
     conc = conc.rename("concentration")
 
@@ -217,7 +218,9 @@ def conc2od(
             optical density data.
     """
 
-    conc = conc.pint.to("molar")
+    if 'micromolar' in str(conc.pint.units):
+        conc = conc.pint.to(conc.pint.units / units.micromolar * units.molar)
+
 
     # Get the extinction coefficients for the chosen spectrum
     wavelengths = dpf.wavelength.values.astype(float)
@@ -230,8 +233,8 @@ def conc2od(
     if dpf[0] != 1:
         od = xr.dot(E, conc, dim=["chromo"]) * (dists * dpf)
     else:
-        od = xr.dot(E, conc, dim=["chromo"]) * (1*units.mm * dpf)
-
+        od = xr.dot(E, conc, dim=["chromo"]) * units.mm
+        
     od = od.rename("optical_density")
 
     if "time" in od.dims:
