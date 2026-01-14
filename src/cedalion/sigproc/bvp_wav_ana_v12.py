@@ -7,17 +7,20 @@
 #       in extract_waveforms integriert.
 #  - classify_waveforms: Klassifizierung nach delta hinzugefügt.
 
+import numpy as np
 from numpy.typing import ArrayLike
 from typing import Dict, Tuple, Any
-import numpy as np
 from scipy.interpolate import PchipInterpolator
-from skmisc.loess import loess
+from scipy.signal import detrend
 from scipy.stats import zscore
+from skmisc.loess import loess
 import tkinter as tk
 import xarray as xr
+import pycwt as wavelet
 import matplotlib.pyplot as plt
-import cedalion.typing as cdt
+from matplotlib.colors import LinearSegmentedColormap
 
+import cedalion.typing as cdt
 from cedalion import physunits
 import cedalion.dataclasses as cdc
 from cedalion.sigproc.frequency import sampling_rate, freq_filter
@@ -180,6 +183,79 @@ def bvp_single_ch(conc_ts: np.ndarray,
     bvp_ts = concTS_fs_new - concTS_fs_new_trend
 
     return bvp_ts, concTS_fs_new, concTS_fs_new_trend
+
+def cmap_parula():
+
+    parula_data = np.array([
+        [0.2081, 0.1663, 0.5292],
+        [0.2116, 0.1898, 0.5777],
+        [0.2123, 0.2138, 0.6270],
+        [0.2081, 0.2386, 0.6771],
+        [0.1959, 0.2645, 0.7279],
+        [0.1707, 0.2919, 0.7792],
+        [0.1253, 0.3242, 0.8303],
+        [0.0591, 0.3598, 0.8683],
+        [0.0117, 0.3875, 0.8820],
+        [0.0057, 0.4086, 0.8828],
+        [0.0165, 0.4266, 0.8786],
+        [0.0329, 0.4430, 0.8720],
+        [0.0498, 0.4586, 0.8641],
+        [0.0629, 0.4737, 0.8554],
+        [0.0723, 0.4887, 0.8467],
+        [0.0779, 0.5040, 0.8384],
+        [0.0793, 0.5200, 0.8312],
+        [0.0749, 0.5375, 0.8263],
+        [0.0641, 0.5570, 0.8240],
+        [0.0488, 0.5772, 0.8228],
+        [0.0343, 0.5966, 0.8199],
+        [0.0265, 0.6137, 0.8135],
+        [0.0239, 0.6287, 0.8038],
+        [0.0231, 0.6418, 0.7913],
+        [0.0228, 0.6535, 0.7768],
+        [0.0267, 0.6642, 0.7607],
+        [0.0384, 0.6743, 0.7436],
+        [0.0590, 0.6838, 0.7254],
+        [0.0843, 0.6928, 0.7062],
+        [0.1133, 0.7015, 0.6859],
+        [0.1453, 0.7098, 0.6646],
+        [0.1801, 0.7177, 0.6424],
+        [0.2178, 0.7250, 0.6193],
+        [0.2586, 0.7317, 0.5954],
+        [0.3022, 0.7376, 0.5712],
+        [0.3482, 0.7424, 0.5473],
+        [0.3953, 0.7459, 0.5244],
+        [0.4420, 0.7481, 0.5033],
+        [0.4871, 0.7491, 0.4840],
+        [0.5300, 0.7491, 0.4661],
+        [0.5709, 0.7485, 0.4494],
+        [0.6099, 0.7473, 0.4337],
+        [0.6473, 0.7456, 0.4188],
+        [0.6834, 0.7435, 0.4044],
+        [0.7184, 0.7411, 0.3905],
+        [0.7525, 0.7384, 0.3768],
+        [0.7858, 0.7356, 0.3633],
+        [0.8185, 0.7327, 0.3498],
+        [0.8507, 0.7299, 0.3360],
+        [0.8824, 0.7274, 0.3217],
+        [0.9139, 0.7258, 0.3063],
+        [0.9450, 0.7261, 0.2886],
+        [0.9739, 0.7314, 0.2666],
+        [0.9938, 0.7455, 0.2403],
+        [0.9990, 0.7653, 0.2164],
+        [0.9955, 0.7861, 0.1967],
+        [0.9880, 0.8066, 0.1794],
+        [0.9789, 0.8271, 0.1633],
+        [0.9697, 0.8481, 0.1475],
+        [0.9626, 0.8705, 0.1309],
+        [0.9589, 0.8949, 0.1132],
+        [0.9598, 0.9218, 0.0948],
+        [0.9661, 0.9514, 0.0755],
+        [0.9763, 0.9831, 0.0538],
+    ])
+
+    parula = LinearSegmentedColormap.from_list("parula", parula_data)
+
+    return parula
 
 
 # --- BVP Analysis -------------------
@@ -985,6 +1061,96 @@ def filter_pulse_rate(pulse_rate_ts: cdt.NDTimeSeries,
 
     return pulse_rate_ts_exp
 
+def calc_wavelet_coherence(
+                            ts_1: cdt.NDTimeSeries,
+                            ts_2: cdt.NDTimeSeries,
+                            wav_storage_details: dict,
+                            dj=1/12, s0=None, J=None,
+                            do_zscore=True, do_detrend=True, do_sig=False,
+                            significance_level=0.95
+                            ):
+    """Calculates the wavelet coherence for two time series.
+
+       Mother-function = Morlet.
+
+    Args:
+        ts_1: first time series.
+        ts_2: second time series (must be of same length as ts_1).
+        wav_storage_details: Channel-wise dictionary.
+        dj: Spacing between discrete scales. Default value is 1/12.
+            Smaller values will result in better scale resolution, but
+            slower calculation.
+        s0: Smallest scale of the wavelet. Default value is 2*dt.
+        J: Number of scales less one. Scales range from s0 up to
+           s0 * 2**(J * dj), which gives a total of (J + 1) scales.
+           Default is J = (log2(N*dt/so))/dj.
+        do_zscore: set True for zscoring time series.
+        do_detrend: set True for detrending time series.
+        do_sig: set True for calculationg significance of coherence.
+        significance_level: Significance level to use. Default is 0.95.
+
+    Returns:
+        Extensions of output_details:
+            - wavelet_coherence
+            - phase
+            - cone_of_interest
+            - frequency
+            - significance
+
+    Example:
+        bvp_cont.wav_storage_details = calc_wavelet_coherence(
+            bvp_cont['bvpa_ts'].sel(compound='bvpa_smooth'),
+            bvp_cont['pulse_rate_ts'].sel(compound='pulse_rate_smooth'),
+            bvp_cont.wav_storage_details,
+            s0=0.5, J=100
+)
+    """
+
+    fs_qty = sampling_rate(ts_1)
+    fs = float(fs_qty.to('Hz').magnitude)
+    dt = 1.0 / fs
+
+    ch_list = ts_1.channel.values
+
+    for ch in ch_list:
+        y_ts_1 = ts_1.sel(channel=ch).to_numpy()
+        y_ts_2 = ts_2.sel(channel=ch).to_numpy()
+
+        y_ts_1 = np.asarray(y_ts_1, dtype=float)
+        y_ts_2 = np.asarray(y_ts_2, dtype=float)
+        if y_ts_1.shape != y_ts_2.shape or y_ts_1.ndim != 1:
+            raise ValueError("y_ts_1 and y_ts_2 must be 1D-arrays of same length.")
+
+        n = y_ts_1.size
+        time = np.arange(n) * dt
+
+        # ----- remove trend -----
+        if do_detrend:
+            y_ts_1 = detrend(y_ts_1, type='linear')
+            y_ts_2 = detrend(y_ts_2, type='linear')
+
+        if s0 is None:
+            s0 = 2 * dt
+        if J is None:
+            J = int(np.log2(n * dt / s0) / dj)
+
+        # ----- calculate wavelet coherence -----
+        WCT, aWCT, coi, freq, significance = wavelet.wct(
+            y_ts_1, y_ts_2, dt, dj=dj, s0=s0, J=J,
+            normalize=do_zscore,
+            sig=do_sig,
+            significance_level=significance_level
+        )
+
+        wav_storage_details[ch]["wavelet_coherence"] = WCT
+        wav_storage_details[ch]["phase"] = aWCT
+        wav_storage_details[ch]["cone_of_interest"] = coi
+        wav_storage_details[ch]["frequency"] = freq
+        wav_storage_details[ch]["significance"] = significance
+        wav_storage_details[ch]["wc_time"] = time
+
+    return wav_storage_details
+
 
 # --- BVP Plots -------------------
 
@@ -1465,10 +1631,10 @@ def plot_concts_bvpats_pr(bvp_cont: BVP_Container, ch: str) -> None:
 
     Args:
         bvp_cont: the BVP Container which includes the blood volume pulse time series
-        created by the function "extract_bvp", the two storages built by
-        the function "extract_waveforms", the blood volume pulse amplitude time
-        series creatd by the function "extract_bvpa" and the pulse rate time
-        series creatd by the function "extract_pulse_rate".
+            created by the function "extract_bvp", the two storages built by
+            the function "extract_waveforms", the blood volume pulse amplitude time
+            series creatd by the function "extract_bvpa" and the pulse rate time
+            series creatd by the function "extract_pulse_rate".
         ch: string that specifies the channel which sould be plotted.
 
     Example:
@@ -1513,3 +1679,116 @@ def plot_concts_bvpats_pr(bvp_cont: BVP_Container, ch: str) -> None:
     ax.set_xlabel('Time [min]')
     ax.set_ylabel('Pulse Rate [1/min]')
     ax.legend(facecolor="white", framealpha=1)
+
+def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
+                           coherence_thresh=0.9,
+                           arrow_step_time=30,
+                           arrow_step_period: int=4) -> None:
+    """Creates a ...... subplot.
+
+    Args:
+        bvp_cont: BVP Container which includes the blood volume pulse time series
+            created by the function "extract_bvp" and the two storages.
+        ch: string that specifies the channel which sould be plotted.
+        coherence_thresh: threshold above which the phase-arrows should be plotted.
+        arrow_step_time: steps between lines of arrow-grid in the direction of time
+            in seconds.
+        arrow_step_period: steps between lines of arrow-grid in the direction of
+            frequency. Higher values lead to lower arrow density.
+
+    Example:
+        plot_concts_bvpats_pr(rec, "S1D15")
+    """  # noqa: D205
+
+    WCT = bvp_cont.wav_storage_details[ch]["wavelet_coherence"]
+    aWCT = bvp_cont.wav_storage_details[ch]["phase"]
+    coi = bvp_cont.wav_storage_details[ch]["cone_of_interest"]
+    freq = bvp_cont.wav_storage_details[ch]["frequency"]
+    significance = bvp_cont.wav_storage_details[ch]["significance"]
+    time = bvp_cont.wav_storage_details[ch]["wc_time"]
+    n = time.size
+
+    fs_qty = sampling_rate(bvp_cont['bvpa_ts'])
+    fs = float(fs_qty.to('Hz').magnitude)
+    arrow_step_time = int(arrow_step_time * fs)
+
+    source = bvp_cont['bvp_ts'].coords["source"].sel(channel=ch).item()
+    detector = bvp_cont['bvp_ts'].coords["detector"].sel(channel=ch).item()
+
+    # ----- Plot: Coherence-Scalogram -----
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    levels = np.linspace(0, 1, 50)
+    cmap = cmap_parula()
+    cf = ax.contourf(time, np.log2(freq), WCT, levels=levels, cmap=cmap, vmin=0, vmax=1)
+    cbar = fig.colorbar(cf, ax=ax)
+    cbar.set_label("Magnitude-squared coherence")
+    cbar.set_ticks(np.arange(0, 1.01, 0.1))
+
+    ax.set_title("BVPA vs PR ("+source+" | "+detector+")")
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Frequency [Hz]")
+
+    yticks = np.array([0.01, 0.03, 0.05, 0.1, 0.2, 0.5, 1, 2])
+    ax.set_yticks(np.log2(yticks))
+    ax.set_yticklabels([f"{v:g}" for v in yticks])
+
+    # ----- Cone of Influence (COI) -----
+    coi = np.asarray(coi)
+    coi_freq = 1.0 / coi
+
+    ax.fill_between(
+        time,
+        np.log2(freq.min()) * np.ones_like(time),
+        np.log2(coi_freq),
+        facecolor="grey",
+        alpha=0.6,
+        edgecolor="k",
+        linewidth=0.2,
+    )
+
+    # ----- Significance -----
+    if not significance == [0]:
+        sig_arr = np.asarray(significance)
+
+        if sig_arr.ndim == 1 and sig_arr.size == WCT.shape[0]:
+            sig2d = sig_arr[:, None] * np.ones_like(WCT)
+            ax.contour(time, np.log2(freq), WCT - sig2d, levels=[0], linewidths=1.0)
+
+        elif sig_arr.ndim == 2 and sig_arr.shape == WCT.shape:
+            ax.contour(time, np.log2(freq), WCT - sig_arr, levels=[0], linewidths=1.0)
+
+    # ----- Phase-Arrows -----
+    TT, FF = np.meshgrid(time, freq)
+
+    inside_coi = FF >= coi_freq[np.newaxis, :]
+    strong_coh = WCT >= coherence_thresh
+    mask = inside_coi & strong_coh
+
+    ti = np.arange(0, n, arrow_step_time)
+    si = np.arange(0, freq.size, arrow_step_period)
+    T_sub = TT[np.ix_(si, ti)]
+    P_sub = FF[np.ix_(si, ti)]
+    phi_sub = aWCT[np.ix_(si, ti)]
+    mask_sub = mask[np.ix_(si, ti)]
+
+    U = np.cos(phi_sub)
+    V = np.sin(phi_sub)
+
+    ax.quiver(
+        T_sub[mask_sub],
+        np.log2(P_sub[mask_sub]),
+        U[mask_sub],
+        V[mask_sub],
+        angles="xy",
+        scale=50,
+        pivot="mid",
+        width=0.0025,
+        headwidth=3,
+        headlength=4
+    )
+
+    ax.set_ylim(np.log2(freq.min()), np.log2(freq.max()))
+
+    plt.tight_layout()
+    plt.show()
