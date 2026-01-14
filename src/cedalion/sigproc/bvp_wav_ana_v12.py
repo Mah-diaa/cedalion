@@ -1,0 +1,1515 @@
+# Version 11 --> 12
+#  - Umstellung: Input = Time-Series.
+#  - extract_waveforms: Normalization 3 aus innerster for-Schleife herausgezogen
+#       und rescaling (mean von 0 bis 1) ergänzt (Rechendauer vorher 37s nachher 20s)
+#  - Plots aktualisiert
+#  - BVP spezifische peakseek Korrektur wieder aus peakseek herausgenommen und
+#       in extract_waveforms integriert.
+#  - classify_waveforms: Klassifizierung nach delta hinzugefügt.
+
+from numpy.typing import ArrayLike
+from typing import Dict, Tuple, Any
+import numpy as np
+from scipy.interpolate import PchipInterpolator
+from skmisc.loess import loess
+from scipy.stats import zscore
+import tkinter as tk
+import xarray as xr
+import matplotlib.pyplot as plt
+import cedalion.typing as cdt
+
+from cedalion import physunits
+import cedalion.dataclasses as cdc
+from cedalion.sigproc.frequency import sampling_rate, freq_filter
+from cedalion.dataclasses.bvp_container import BVP_Container
+
+
+# --- Helper functions used only in BVP Analysis -------------------
+
+def dialog_artefact_removal() -> None:
+    dialog = tk.Tk()
+    dialog.title("Request - Artefact Removal done?")
+    dialog.resizable(False, False)
+
+    dialog.attributes("-topmost", True)
+    dialog.lift()
+    dialog.focus_force()
+    dialog.grab_set()
+
+    label = tk.Label(dialog,
+                     text="ATTENTION!\nArtefact removal is necessary before calculating BVP parameters!",  # noqa: E501
+                     font=('Calibir', 14),
+                     justify="center")
+    label.pack(padx=20, pady=20)
+
+    result = {"choice": None}
+
+    def do_continue():
+        dialog.grab_release()
+        result["choice"] = "continue"
+        dialog.destroy()
+
+    def do_abort():
+        result["choice"] = "abort"
+        dialog.destroy()
+
+    btn_frame = tk.Frame(dialog)
+    btn_frame.pack(pady=20)
+
+    btn_continue = tk.Button(btn_frame, text="Continue",
+                             command=do_continue, font=('Calibri', 12),
+                             width=10)
+    btn_continue.pack(side="left", padx=20)
+
+    btn_abort = tk.Button(btn_frame, text="Abort",
+                          command=do_abort,
+                          font=('Calibri', 12), width=10)
+    btn_abort.pack(side="right", padx=20)
+
+    dialog.mainloop()
+    return result["choice"]
+
+def interpft(x, ny):
+    x = np.asarray(x)
+    m = x.size
+
+    # FFT
+    X = np.fft.fft(x)
+
+    # Lower half incl. Nyquist
+    nyq = int(np.ceil((m + 1) / 2))
+
+    # New frequency-domain array
+    Y = np.zeros(ny, dtype=complex)
+
+    # Copy lower frequencies (0 ... nyq-1)
+    Y[:nyq] = X[:nyq]
+
+    # Copy upper frequencies (mirror side)
+    Y[ny - (m - nyq) + 1:] = X[nyq + 1:]
+
+    # Even length: split Nyquist term
+    if m % 2 == 0:
+        Y[nyq] = X[nyq] / 2
+        Y[nyq + ny - m] = X[nyq] / 2
+
+    # IFFT
+    y = np.fft.ifft(Y)
+
+    # discard complex part if input was real
+    if np.isrealobj(x):
+        y = y.real
+
+    return y * (ny / m)
+
+def peakseek(
+    x: ArrayLike,
+    minpeakdist: int = 1,
+    minpeakh: float | None = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
+
+    x = np.asarray(x).flatten()
+
+    # 1. Local maxima (including flat peaks)
+    locs = np.where((x[1:-1] >= x[:-2]) & (x[1:-1] >= x[2:]))[0] + 1
+
+    # 2. Apply minimum peak height
+    if minpeakh is not None:
+        locs = locs[x[locs] > minpeakh]
+
+    # 3. Enforce minimum distance between peaks
+    if minpeakdist > 1:
+        while True:
+            d = np.diff(locs) < minpeakdist
+            if not np.any(d):
+                break
+
+            pks = x[locs]
+
+            # Indices of violating pairs
+            idx = np.where(d)[0]
+
+            # Compare left and right peaks
+            left_vals = pks[idx]
+            right_vals = pks[idx + 1]
+
+            # If right peak is higher → remove left
+            remove_left = left_vals < right_vals
+
+            # If left peak is higher or equal → remove right
+            remove_right = ~remove_left
+
+            # Convert pair positions to indices in locs
+            del_idx = np.concatenate([
+                idx[remove_left],         # left elements
+                (idx + 1)[remove_right]   # right elements
+            ])
+
+            locs = np.delete(locs, del_idx)
+
+    return locs, x[locs]
+
+def bvp_single_ch(conc_ts: np.ndarray,
+                  fs: float,
+                  fs_new: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+    # --- Resample (upsample) the conc time series (new fs = 50 Hz) ---
+    # Normalize data so that it starts from zero
+    conc_ts = conc_ts - conc_ts[0]
+
+    Duration_fs = len(conc_ts) / fs
+    fs_ratio = fs_new / fs
+
+    # --- Create time vectors (seconds) ---
+    t_s_new = np.linspace(0, Duration_fs, int(fs_ratio * len(conc_ts)))
+    t_s = np.linspace(0, Duration_fs, len(conc_ts))
+
+    # --- PCHIP interpolation to preserve waveform shape ---
+    pchip = PchipInterpolator(t_s, conc_ts)
+    concTS_fs_new = pchip(t_s_new)
+
+    # --- High-pass filtering via LOWESS smoothing ---
+    windowsize_s = 7
+    model = loess(t_s_new, concTS_fs_new,
+                  span = windowsize_s * fs_new / len(concTS_fs_new),
+                  degree=2, family='gaussian')
+    model.fit()
+    concTS_fs_new_trend = model.outputs.fitted_values
+
+    # --- Remove trend → BVP time series ---
+    bvp_ts = concTS_fs_new - concTS_fs_new_trend
+
+    return bvp_ts, concTS_fs_new, concTS_fs_new_trend
+
+
+# --- BVP Analysis -------------------
+
+def extract_bvp(hbo_conc_ts: cdt.NDTimeSeries) -> cdt.NDTimeSeries:
+    """Extracts the blood volume pulsation (BVP) time series from an
+    HbO concentration time series.
+
+    IMPORTANT: Artefact removal must be performed before calling this function.
+
+    Args:
+        hbo_conc_ts: HbO concentration time series from which the BVP
+            signal should be extracted.
+
+    Returns:
+        NDTimeSeries containing:
+            - bvp_ts: extracted blood volume pulsation
+            - hbo_conc_ts_50hz: resampled HbO signal at 50 Hz
+            - low_freq_trend: estimated low-frequency trend
+
+    Example:
+        bvp_ts = extract_bvp(rec["conc"].sel(chromo="HbO"))
+    """  # noqa: D205
+
+    # --- Ask user to confirm artefact removal to avoid invalid analysis
+    choice = dialog_artefact_removal()
+    if choice == "abort":
+        print("\n\n ----- BVP analysis aborted by User -----\n\n")
+        return
+
+    # --- Determine original sampling rate in Hz
+    fs_qty = sampling_rate(hbo_conc_ts)
+    fs = float(fs_qty.to('Hz').magnitude)
+
+    # --- Target sampling rate for BVP analysis
+    fs_new = 50
+
+    # --- Extract channel list and generate new time vector after resampling
+    ch_list = hbo_conc_ts.channel.values
+    time_s_new = np.linspace(
+        0,
+        hbo_conc_ts.time.values[-1],
+        int((fs_new / fs) * hbo_conc_ts.sizes["time"])
+    )
+
+    # --- Preallocate data array:
+    #     dimensions: channel × compound × time
+    #     compounds: [bvp_ts, hbo_conc_ts_50hz, low_freq_trend]
+    place_holder = np.zeros((len(ch_list), 3, len(time_s_new)))
+
+    # --- Create output NDTimeSeries with proper metadata and coordinates
+    bvp_ts = cdc.schemas.build_timeseries(
+        place_holder,
+        ["channel", "compound", "time"],
+        time_s_new,
+        ch_list,
+        'uM',
+        's',
+        {
+            "compound": ("compound", ["bvp_ts", "hbo_conc_ts_50hz", "low_freq_trend"]),
+            "samples": ("time", np.arange(0, len(time_s_new))),
+            "channel": ch_list,
+            "source": ("channel", hbo_conc_ts.source.values),
+            "detector": ("channel", hbo_conc_ts.detector.values),
+        }
+    )
+
+    # --- Process each channel independently
+    for ch in ch_list:
+        # Select single-channel HbO signal
+        actual_ts = hbo_conc_ts.sel(channel=ch)
+        actual_ts_np = actual_ts.to_numpy()
+
+        # Extract BVP, resampled signal, and low-frequency trend
+        bvp_single_ts, hbo_conc_ts_50hz, low_freq_trend = bvp_single_ch(
+            actual_ts_np, fs, fs_new
+        )
+
+        # Store results with correct physical units
+        bvp_ts.loc[{"channel": ch, "compound": "bvp_ts"}] = (
+            bvp_single_ts * physunits.units.uM
+        )
+        bvp_ts.loc[{"channel": ch, "compound": "low_freq_trend"}] = (
+            low_freq_trend * physunits.units.uM
+        )
+        bvp_ts.loc[{"channel": ch, "compound": "hbo_conc_ts_50hz"}] = (
+            hbo_conc_ts_50hz * physunits.units.uM
+        )
+
+    return bvp_ts
+
+def extract_waveforms(
+    bvp_ts: cdt.NDTimeSeries
+    ) -> Tuple[
+        Dict[str, Dict[str, Any]],
+        Dict[str, Dict[str, Any]]
+    ]:
+    """Extracts and normalizes single BVP waveforms from a blood volume
+    pulsation (BVP) time series.
+
+    For each channel, diastolic minima are detected and used to segment
+    the BVP signal into individual pulse waveforms. Non-physiological
+    segments are rejected based on local duration statistics.
+    Each valid waveform is then normalized in amplitude and time.
+
+    Processing steps per channel:
+        1. Detection of diastolic minima (waveform boundaries)
+        2. Extraction of waveform segments between consecutive minima
+        3. Rejection of non-physiological segments (duration-based)
+        4. Detection of systolic maxima within each waveform
+        5. Normalization:
+           - linear detrending (y-normalization)
+           - resampling to fixed length of 100 samples (x-normalization)
+           - z-scoring
+
+    Args:
+        bvp_ts: BVP time series (compound="bvp_ts") created by extract_bvp.
+
+    Returns:
+        Tuple of two dictionaries, both keyed by channel name:
+
+        1. output_user:
+            Compact waveform features intended for downstream or
+            user-facing analysis:
+                - bvp_max_value: systolic peak amplitudes
+                - bvp_max_idx: indices of systolic peaks
+                - bvp_min_value: diastolic minima amplitudes
+                - bvp_min_idx: indices of diastolic minima
+
+        2. output_details:
+            Detailed waveform data intended for inspection, debugging,
+            or advanced analyses:
+                - list_wav_raw_and_y_normal: raw and detrended waveforms
+                  with corresponding time vectors
+                - nparray_wav_xy_normal_all: matrix of resampled waveforms
+                - nparray_wav_xy_normal_zscore_all: z-scored waveform matrix
+
+    Example:
+        wav_storage_user, wav_storage_details = extract_waveforms(bvp_ts.sel(compound="bvp_ts"))
+    """  # noqa: D205, E501
+
+    # --- Determine sampling rate in Hz ---
+    fs_qty = sampling_rate(bvp_ts)
+    fs = float(fs_qty.to('Hz').magnitude)
+
+    # --- Parameters for diastolic minima detection ---
+    min_peak_dist = int(fs / 3)   # minimum distance between minima
+    min_peak_height = 0           # minimum height of minima
+
+    wav_storage_user = {}
+    wav_storage_details = {}
+
+    # --- Process each channel independently ---
+    for ch in bvp_ts.channel.values:
+        actual_ts = bvp_ts.sel(channel=ch)
+        actual_ts_np = actual_ts.to_numpy().squeeze()
+
+        # --- Detect diastolic minima (invert signal to find minima as peaks) ---
+        minima_idx, minima_value = peakseek(
+            -1 * actual_ts_np,
+            min_peak_dist,
+            min_peak_height
+        )
+        minima_value = -1 * minima_value
+
+        # --- BVP analysis specific correction of peakseek ---
+        # Compare the duration of the pulse with its neighbors
+        # and filter out if it is too short
+        i = 0
+        while i < len(minima_idx) - 1:
+            start = max(0, i-3)
+            end = min(len(minima_idx), i+5)
+
+            diff = np.diff(minima_idx[start:end])
+            if len(diff) == 0:
+                i += 1
+                continue
+
+            diff_median = np.median(diff)
+
+            if i == 0 and minima_idx[i+1] - minima_idx[i] < diff_median * 0.6:
+                help_var = minima_value[i:i+2]
+                del_idx = np.argmax(help_var)
+                del_pos = i + del_idx
+
+                minima_idx = np.delete(minima_idx, del_pos)
+                minima_value = np.delete(minima_value, del_pos)
+
+                continue
+
+            if minima_idx[i+1] - minima_idx[i] < diff_median * 0.6:
+                help_var = minima_value[i-1:i+2]
+                del_idx = np.argmax(help_var)
+                del_pos = i - 1 + del_idx
+
+                minima_idx = np.delete(minima_idx, del_pos)
+                minima_value = np.delete(minima_value, del_pos)
+
+                if del_idx == 1:
+                    i = i-1
+
+                continue
+
+            i = i + 1
+
+        # Compare the distance between the median minimum value and zero
+        # with the distance between the actual minimum value and zero, and
+        # filter the value out if it the acutal distance is too small.
+        minimma_value_median = np.median(minima_value)
+        dist_median_zero = np.abs(0 - minimma_value_median)
+
+        del_idx_list = []
+        n = len(minima_idx)
+
+        for i in range(n):
+            actual_dist_zero = abs(0 - minima_value[i])
+            if actual_dist_zero < dist_median_zero * 0.1:
+                del_idx_list.append(i)
+
+        minima_idx = np.delete(minima_idx, del_idx_list)
+        minima_value = np.delete(minima_value, del_idx_list)
+
+        # --- Initialize lists ---
+        bvp_waveforms = []
+        bvp_max_value = []
+        bvp_max_idx = []
+        bvp_wav_xy_normal_all = []
+
+        # --- Iterate over consecutive minima to extract waveforms ---
+        for i in range(len(minima_idx) - 1):
+
+            # --- Robust duration check using local median ---
+            start = max(0, i - 3)
+            end = min(len(minima_idx), i + 5)
+            diff = np.diff(minima_idx[start:end])
+
+            if len(diff) == 0:
+                continue
+
+            diff_median = np.median(diff)
+
+            # Reject abnormally long segments (non-physiological)
+            if minima_idx[i + 1] - minima_idx[i] > diff_median * 1.5:
+                continue
+
+            # --- Extract waveform segment ---
+            wav = actual_ts_np[minima_idx[i]: minima_idx[i + 1]]
+
+            # --- Detect systolic maximum within waveform ---
+            local_max_idx = np.argmax(wav)
+            bvp_max_value.append(wav[local_max_idx])
+            bvp_max_idx.append(local_max_idx + minima_idx[i])
+
+            # --- Time vector for raw waveform ---
+            wav_len = minima_idx[i + 1] - minima_idx[i]
+            time_wav_s = np.linspace(0, wav_len / fs, wav_len)
+
+            # --- Normalization #1: remove linear trend ---
+            trend_x = np.array([0, len(wav) - 1])
+            trend_y = np.array([wav[0], wav[-1]])
+            pchip_trend = PchipInterpolator(trend_x, trend_y)
+            trend = pchip_trend(np.arange(len(wav)))
+            wav_y_normal = wav - trend
+
+            # --- Normalization #2: resample waveform to fixed length (100) ---
+            wav_xy_normal = interpft(wav_y_normal, 100)
+
+            # --- Collect waveform-level data ---
+            bvp_waveforms.append({
+                "wav_raw": wav,
+                "wav_y_normal": wav_y_normal,
+                "wav_time_s": time_wav_s
+            })
+
+            bvp_wav_xy_normal_all.append(wav_xy_normal)
+
+        # --- Convert lists to NumPy arrays ---
+        bvp_max_value = np.array(bvp_max_value)
+        bvp_max_idx = np.array(bvp_max_idx)
+        bvp_wav_xy_normal_all = np.array(bvp_wav_xy_normal_all).T
+
+        # --- Normalization #3: z-score waveform ---
+        bvp_wav_xy_normal_zscore_all = zscore(bvp_wav_xy_normal_all)
+
+        for i in range(bvp_wav_xy_normal_zscore_all.shape[1]):
+            help_wav = bvp_wav_xy_normal_zscore_all[:,i]
+
+            trend_x = np.array([0, len(help_wav) - 1])
+            trend_y = np.array([help_wav[0], help_wav[-1]])
+            pchip_trend = PchipInterpolator(trend_x, trend_y)
+            trend = pchip_trend(np.arange(len(help_wav)))
+            help_wav_detrended = help_wav - trend
+
+            bvp_wav_xy_normal_zscore_all[:,i] = help_wav_detrended
+
+        help_mean = np.mean(bvp_wav_xy_normal_zscore_all, axis=1)
+        help_max = help_mean.max()
+
+        bvp_wav_xy_normal_zscore_all = (bvp_wav_xy_normal_zscore_all / help_max)
+
+        # --- Store channel-wise results ---
+        wav_storage_user[ch] = {
+            "bvp_max_value": bvp_max_value,
+            "bvp_max_idx": bvp_max_idx,
+            "bvp_min_value": minima_value,
+            "bvp_min_idx": minima_idx,}
+        wav_storage_details[ch] ={
+            "list_wav_raw_and_y_normal": bvp_waveforms,
+            "nparray_wav_xy_normal_all": bvp_wav_xy_normal_all,
+            "nparray_wav_xy_normal_zscore_all": bvp_wav_xy_normal_zscore_all}
+
+    return wav_storage_user, wav_storage_details
+
+def remove_artifact_waveforms(
+    bvp_ts: cdt.NDTimeSeries,
+    wav_storage_user: dict,
+    wav_storage_details: dict
+    ) -> Tuple[
+        Dict[str, Dict[str, Any]],
+        Dict[str, Dict[str, Any]]
+    ]:
+    """Removes artifactual BVP waveforms based on deviation from the
+    mean normalized waveform.
+
+    For each channel, a mean waveform is computed from the z-scored,
+    xy-normalized waveforms. For every individual waveform, a deviation
+    metric is calculated as the summed absolute distance to this mean
+    waveform. This deviation serves as an artifact score.
+    Waveforms with deviation values below the 2.5th percentile or above
+    the 97.5th percentile are classified as artifacts and removed.
+    The cleaned waveform matrices are stored alongside the original data
+    without overwriting them.
+
+    Args:
+        bvp_ts: BVP time series used only to iterate over available channels.
+        wav_storage_user: Channel-wise dictionary created by
+            extract_waveforms, containing user-facing waveform data.
+        wav_storage_details: Channel-wise dictionary created by
+            extract_waveforms, containing detailed waveform matrices.
+
+    Returns:
+        Tuple of two dictionaries (updated in-place and returned for
+        convenience):
+
+        1. wav_storage_user:
+            Extended with artifact-cleaned matrices of x/y-normalized and
+            z-scored waveforms:
+                - nparray_wav_xy_normal_zscore_all_woa
+
+        2. wav_storage_details:
+            Extended with artifact-cleaned matrices and diagnostic information:
+                - nparray_wav_xy_normal_all_woa
+                - P_025: lower deviation percentile threshold
+                - P_975: upper deviation percentile threshold
+                - bvp_wav_dev: deviation score per waveform
+
+    Example:
+        wav_storage_user, wav_storage_details = remove_artifact_waveforms(
+            bvp_ts,
+            wav_storage_user,
+            wav_storage_details
+        )
+    """  # noqa: D205
+
+    for ch in bvp_ts.channel.values:
+        actual_wavs_final = wav_storage_details[ch]["nparray_wav_xy_normal_zscore_all"]
+        actual_wavs_xynorm = wav_storage_details[ch]["nparray_wav_xy_normal_all"]
+
+        # Number of waveforms
+        n_bvp_wav = actual_wavs_final.shape[1] - 1
+
+        # Mean waveform (over all waveforms)
+        bvp_wav_final_mean = np.mean(actual_wavs_final, axis=1)
+
+        # Compute deviation metric per waveform (absolute deviation)
+        bvp_wav_dev = np.zeros(n_bvp_wav)
+        for i in range(n_bvp_wav):
+            bvp_wav_dev[i] = np.sum(np.abs(actual_wavs_final[:, i] - bvp_wav_final_mean))  # noqa: E501
+
+        # Percentile thresholds
+        p_025 = np.percentile(bvp_wav_dev, 2.5)
+        p_975 = np.percentile(bvp_wav_dev, 97.5)
+
+        # Artifact indices
+        idx_bvp_wav_p025  = np.where(bvp_wav_dev < p_025)[0]
+        idx_bvp_wav_p975 = np.where(bvp_wav_dev > p_975)[0]
+        idx_bvp_wav_p025_p975  = np.concatenate([idx_bvp_wav_p025, idx_bvp_wav_p975])
+
+        # Remove artifacts and store output
+        wav_storage_user[ch]["nparray_wav_xy_normal_zscore_all_woa"] = np.delete(
+            actual_wavs_final, idx_bvp_wav_p025_p975, axis=1)
+        wav_storage_user[ch]["nparray_wav_xy_normal_all_woa"] = np.delete(
+            actual_wavs_xynorm, idx_bvp_wav_p025_p975, axis=1)
+        wav_storage_details[ch]["P_025"] = p_025
+        wav_storage_details[ch]["P_975"] = p_975
+        wav_storage_details[ch]["bvp_wav_dev"] = bvp_wav_dev
+
+    return wav_storage_user, wav_storage_details
+
+def classify_waveforms(
+        bvp_cont: BVP_Container,
+        classification_index: str) -> Tuple[
+        Dict[str, Dict[str, Any]],
+        Dict[str, Dict[str, Any]]
+    ]:
+    """Classifies artifact-cleaned BVP waveforms based on their
+    systolic peak amplitudes.
+
+    For each channel, the classification index is computed (see section Args).
+    Waveforms are then classified into three amplitude-based groups using
+    percentile thresholds:
+        - type 1:  < 25th percentile
+        - type 2: 25th to 75th percentile
+        - type 3:  > 75th percentile
+
+    Args:
+        bvp_cont: the BVP Container which includes the two storages built by
+        the function "extract_waveforms", and edited by the function
+        "remove_artifact_waveforms" and "classify_waveforms". To create
+        this storage a blood volume pulse time series created by the function
+        "extract_bvp" is necessary.
+        classification_index: string that defines which index is used
+        for classification. Use 'max' for using the highest maximum of each
+        xy-normalized and z-scored waveform, and 'delta' for using the vertical
+        distance between the highest maximum and the lowest local minimum
+        of each xy-normalized waveform.
+
+    Returns:
+        Tuple of two dictionaries (updated in-place and returned):
+        Updates for classification with delta are written in brackets.
+        1. wav_storage_user:
+            Extended with waveform classes:
+                - nparray_wav_max_type1 (nparray_wav_delta_type1)
+                - nparray_wav_max_type2 (nparray_wav_delta_type2)
+                - nparray_wav_max_type3 (nparray_wav_delta_type3)
+        2. wav_storage_details:
+            Extended with classification diagnostics:
+                - max_bvp_wav (delta_bvp_wav): per-waveform peak amplitudes
+                - max_P_25 (delta_P_25): 25th percentile threshold
+                - max_P_75 (delta_P75): 75th percentile threshold
+                - (text_num_del_wavs: Text for printing. Tells the user how many
+                    waveforms are discarded and the total amount of waveforms
+                    for each channel.)
+
+    Example:
+        bvp_cont.wav_storage_user, bvp_cont.wav_storage_details = classify_waveforms(
+        bvp_cont, 'delta')
+    """  # noqa: D205, E501
+
+    bvp_ts= bvp_cont['bvp_ts']
+    wav_storage_user = bvp_cont.wav_storage_user
+    wav_storage_details= bvp_cont.wav_storage_details
+
+    if classification_index == 'max':
+    # --- Iterate over all channels ---
+        for ch in bvp_ts.channel.values:
+
+            # --- Artifact-cleaned, xy_normalized and z-scored waveforms ---
+            actual_wavs = (
+                wav_storage_user[ch]["nparray_wav_xy_normal_zscore_all_woa"]
+            )
+
+            # --- Compute highest maximum for each waveform ---
+            max_bvp_wav = np.max(actual_wavs, axis=0)
+
+            # --- Percentile-based classification thresholds ---
+            p25 = np.percentile(max_bvp_wav, 25)
+            p75 = np.percentile(max_bvp_wav, 75)
+
+            # --- Boolean masks for waveform classes ---
+            idx_type1 = max_bvp_wav < p25
+            idx_type2 = max_bvp_wav > p75
+            idx_type3 = (max_bvp_wav > p25) & (max_bvp_wav < p75)
+
+            # --- Store classified waveform groups ---
+            wav_storage_user[ch]["nparray_wav_max_type1"] = (
+                actual_wavs[:, idx_type1])
+            wav_storage_user[ch]["nparray_wav_max_type2"] = (
+                actual_wavs[:, idx_type2])
+            wav_storage_user[ch]["nparray_wav_max_type3"] = (
+                actual_wavs[:, idx_type3])
+
+            # --- Store classification metrics ---
+            wav_storage_details[ch]["max_bvp_wav"] = max_bvp_wav
+            wav_storage_details[ch]["max_P_25"] = p25
+            wav_storage_details[ch]["max_P_75"] = p75
+
+    if classification_index == 'delta':
+    # --- Iterate over all channels ---
+        for ch in bvp_ts.channel.values:
+
+            # --- Artifact-cleaned, xy_normalized waveforms ---
+            actual_wavs = (
+                wav_storage_user[ch]["nparray_wav_xy_normal_all_woa"]
+            )
+
+            # --- Compute vertical distance between the highest maximum
+            # and the lowest local minimum for each waveform ---
+            max_bvp_wav = np.max(actual_wavs, axis=0)
+            min_bvp_wav = max_bvp_wav.copy()
+
+            for i in range(actual_wavs.shape[1]):
+                all_min_locs, all_min_values = peakseek(-1 * actual_wavs[:,i])
+                all_min_values = -1 * all_min_values
+
+                if len(all_min_locs) > 1:
+                    help_min_locs = all_min_locs[(all_min_locs > 20) &
+                                                 (all_min_locs < 60)]
+                    help_min_values = actual_wavs[:,i][help_min_locs]
+
+                    if len(help_min_values) == 0:
+                        continue
+
+                    min_bvp_wav[i] = min(help_min_values)
+
+                if len(all_min_locs) == 0:
+                    continue
+
+                if len(all_min_locs) == 1:
+                    if float(all_min_locs) > 20 and float(all_min_locs) < 60:
+                        min_bvp_wav[i] = float(all_min_values)
+                    if float(all_min_locs) <= 20 or float(all_min_locs) >= 60:
+                        continue
+
+            delta_bvp_wav = max_bvp_wav - min_bvp_wav
+            del_idx = np.where(delta_bvp_wav == 0)
+
+            text_num_del_wavs = f'{ch}:  {len(del_idx[0])}  of  {actual_wavs.shape[1]}'
+
+            delta_bvp_wav = np.delete(delta_bvp_wav, del_idx)
+            actual_wavs = np.delete(actual_wavs, del_idx, 1)
+
+            # --- Percentile-based classification thresholds ---
+            p25 = np.percentile(delta_bvp_wav, 25)
+            p75 = np.percentile(delta_bvp_wav, 75)
+
+            # --- Boolean masks for waveform classes ---
+            idx_typ1 = delta_bvp_wav < p25
+            idx_typ2 = delta_bvp_wav > p75
+            idx_typ3 = (delta_bvp_wav > p25) & (delta_bvp_wav < p75)
+
+            # --- Store classified waveform groups ---
+            wav_storage_user[ch]["nparray_wav_delta_type1"] = (
+                actual_wavs[:, idx_typ1])
+            wav_storage_user[ch]["nparray_wav_delta_type2"] = (
+                actual_wavs[:, idx_typ2])
+            wav_storage_user[ch]["nparray_wav_delta_type3"] = (
+                actual_wavs[:, idx_typ3])
+
+            # --- Store classification metrics ---
+            wav_storage_details[ch]["delta_bvp_wav"] = delta_bvp_wav
+            wav_storage_details[ch]["delta_P_25"] = p25
+            wav_storage_details[ch]["delta_P_75"] = p75
+            wav_storage_details[ch]["text_num_del_wavs"] = text_num_del_wavs
+
+    return wav_storage_user, wav_storage_details
+
+def extract_bvpa(
+    bvp_ts: cdt.NDTimeSeries,
+    wav_storage_user: dict
+) -> cdt.NDTimeSeries:
+    """Extracts the blood volume pulse amplitude (BVPA) time series from
+    a blood volume pulse (BVP) signal.
+
+    For each channel, upper and lower envelopes of the BVP signal are
+    estimated using systolic maxima and diastolic minima obtained from
+    waveform analysis. The raw BVPA is computed as the difference between
+    these envelopes. Additionally, a smoothed BVPA signal is generated
+    using LOESS smoothing.
+
+    The resulting BVPA-related time series are stored as separate
+    compounds in a single NDTimeSeries.
+
+    Args:
+        bvp_ts: BVP time series created by `extract_bvp` (compound="bvp_ts").
+        wav_storage_user: Channel-wise dictionary created by
+            `extract_waveforms` (subsequent processing by
+            `remove_artifact_waveforms` or `classify_waveforms` is
+            possible).
+
+    Returns:
+        NDTimeSeries with dimensions (channel x compound x time) containing:
+            - env_up: upper BVP envelope (interpolated systolic maxima)
+            - env_down: lower BVP envelope (interpolated diastolic minima)
+            - bvpa_raw: raw blood volume pulse amplitude
+            - bvpa_smooth: LOESS-smoothed BVPA signal
+
+    Example:
+        bvpa_ts = extract_bvpa(
+            bvp_ts.sel(compound="bvp_ts"),
+            wav_storage_user
+        )
+    """  # noqa: D205
+
+    fs_qty = sampling_rate(bvp_ts)
+    fs = float(fs_qty.to('Hz').magnitude)
+
+    ch_list = bvp_ts.channel.values
+    time = bvp_ts.time.values
+    place_holder = np.zeros((len(ch_list), 4, len(time)))
+
+    bvpa_ts = cdc.schemas.build_timeseries(
+                place_holder,
+                ["channel", "compound", "time"],
+                time,
+                ch_list,
+                'uM',
+                's',
+                {"compound": ("compound", ["env_up", "env_down", "bvpa_raw", "bvpa_smooth"]),  # noqa: E501
+                "samples": ("time", np.arange(0, len(time))),
+                "source": ("channel", bvp_ts.source.values),
+                "detector": ("channel", bvp_ts.detector.values)})
+
+    for ch in ch_list:
+        actual_bvp_ts = bvp_ts.sel(channel=ch)
+        actual_bvp_ts_np = actual_bvp_ts.to_numpy().squeeze()
+        actual_wav_storage = wav_storage_user[ch]
+
+        # --- upper Envelope ---
+        x_up = np.concatenate(([0], actual_wav_storage["bvp_max_idx"]))
+        y_up = np.concatenate(([actual_wav_storage["bvp_max_value"][0]],
+                               actual_wav_storage["bvp_max_value"]))
+        pchip_up = PchipInterpolator(x_up, y_up)
+        env_up = pchip_up(np.arange(len(actual_bvp_ts_np)))
+
+        # --- lower Envelope ---
+        x_down = np.concatenate(([0], actual_wav_storage["bvp_min_idx"]))
+        y_down = np.concatenate(([actual_wav_storage["bvp_min_value"][0]],
+                                 actual_wav_storage["bvp_min_value"]))
+        pchip_down = PchipInterpolator(x_down, y_down)
+        env_down = pchip_down(np.arange(len(actual_bvp_ts_np)))
+
+        # --- BVPA = upper Envelope - lower Envelope ---
+        bvpa_raw = env_up - env_down
+
+        # --- LOESS smoothing (1 sec window = 50 samples) ---
+        model = loess(np.arange(len(bvpa_raw)), bvpa_raw,
+                    span=fs / len(bvpa_raw), degree=2, family='gaussian')
+        model.fit()
+        bvpa_smooth = model.outputs.fitted_values
+
+        bvpa_ts.loc[{"channel": ch, "compound": "env_up"}
+                    ] = env_up * physunits.units.uM
+        bvpa_ts.loc[{"channel": ch, "compound": "env_down"}
+                    ] = env_down * physunits.units.uM
+        bvpa_ts.loc[{"channel": ch, "compound": "bvpa_raw"}
+                    ] = bvpa_raw * physunits.units.uM
+        bvpa_ts.loc[{"channel": ch, "compound": "bvpa_smooth"}
+                    ] = bvpa_smooth * physunits.units.uM
+
+    return bvpa_ts
+
+def extract_pulse_rate(
+    bvp_ts: cdt.NDTimeSeries,
+    wav_storage_user: dict
+) -> cdt.NDTimeSeries:
+    """Extracts the pulse rate (PR) time series from a blood volume pulse (BVP)
+    signal using diastolic minima.
+
+    For each channel, the temporal distances between consecutive diastolic
+    minima are computed and converted to pulse rate values (beats per minute).
+    Non-physiological intervals are corrected using a local median-based
+    heuristic. The pulse rate is then interpolated to a continuous time series
+    and additionally smoothed using LOESS.
+    The resulting pulse rate signals are stored as separate compounds in a
+    single NDTimeSeries.
+
+    Args:
+        bvp_ts: BVP time series created by `extract_bvp` (compound="bvp_ts").
+        wav_storage_user: Channel-wise dictionary created by
+            `extract_waveforms` (subsequent processing by
+            `remove_artifact_waveforms` or `classify_waveforms` is
+            possible).
+
+    Returns:
+        NDTimeSeries with dimensions (channel x compound x time) containing:
+            - pulse_rate: interpolated pulse rate time series (beats per minute)
+            - pulse_rate_smooth: LOESS-smoothed pulse rate time series
+
+    Example:
+        pulse_rate_ts = extract_pulse_rate(
+            bvp_ts.sel(compound="bvp_ts"),
+            wav_storage_user
+        )
+    """  # noqa: D205
+
+    fs_qty = sampling_rate(bvp_ts)
+    fs = float(fs_qty.to('Hz').magnitude)
+
+    ch_list = bvp_ts.channel.values
+    time = bvp_ts.time.values
+    place_holder = np.zeros((len(ch_list), 2, len(time)))
+
+    pulse_rate_ts = cdc.schemas.build_timeseries(
+                place_holder,
+                ["channel", "compound", "time"],
+                time,
+                ch_list,
+                'min**-1',
+                's',
+                {"compound": ("compound", ["pulse_rate", "pulse_rate_smooth"]),
+                "samples": ("time", np.arange(0, len(time))),
+                "source": ("channel", bvp_ts.source.values),
+                "detector": ("channel", bvp_ts.detector.values)})
+
+    for ch in ch_list:
+        actual_wav_storage = wav_storage_user[ch]
+        minima_idx = actual_wav_storage["bvp_min_idx"]
+
+        # --- PR_raw: Differences between maxima ---
+        pulse_rate_dist = np.diff(minima_idx)
+
+        # --- filters out non physiological pulses (if diff between minima is too
+        #     large --> value replaced by mean of neighbors) ---
+        n = len(pulse_rate_dist)
+
+        for i in range(n - 1):
+            start = max(0, i-3)
+            end = min(n, i+5)
+
+            window = pulse_rate_dist[start:end]
+            if len(window) == 0:
+                continue
+
+            window_median = np.median(window)
+
+            if pulse_rate_dist[i] > (window_median * 1.6) and i == 0:
+                pulse_rate_dist[i] = pulse_rate_dist[i+1]
+                continue
+
+            if pulse_rate_dist[i] > (window_median * 1.6) and i == n:
+                pulse_rate_dist[i] = pulse_rate_dist[i-1]
+                continue
+
+            if pulse_rate_dist[i] > (window_median * 1.6):
+                pulse_rate_dist[i] = np.mean([pulse_rate_dist[i-1], pulse_rate_dist[i+1]])  # noqa: E501
+
+        # --- Interpolated PR time series ---
+        pchip_x = minima_idx[1:]
+        pchip_x_new = np.arange(minima_idx[1], minima_idx[-1] + 1)
+
+        pchip = PchipInterpolator(pchip_x, pulse_rate_dist)
+        pulse_rate_intp_help = pchip(pchip_x_new)
+        pulse_rate_intp = 1.0 / (pulse_rate_intp_help / fs / 60)
+
+        # --- Append initial and final sequences ---
+        pulse_rate_start_seq = np.ones(minima_idx[1] - 1) * pulse_rate_intp[0]
+        pulse_rate_end_seq = np.ones(len(time) - minima_idx[-1]) * pulse_rate_intp[-1]
+
+        pulse_rate_intp_full = np.concatenate([pulse_rate_start_seq,
+                                               pulse_rate_intp,
+                                               pulse_rate_end_seq])
+
+        # --- Loess smoothing (5 second window) ---
+        N = 5 * fs
+        span = N / len(pulse_rate_intp_full)
+
+        model = loess(np.arange(len(pulse_rate_intp_full)), pulse_rate_intp_full,
+                    span=span, degree=2, family='gaussian')
+        model.fit()
+        pulse_rate_smooth = model.outputs.fitted_values
+
+        pulse_rate_ts.loc[{"channel": ch, "compound": "pulse_rate"}
+                          ] = pulse_rate_intp_full * physunits.units.min**-1
+        pulse_rate_ts.loc[{"channel": ch, "compound": "pulse_rate_smooth"}
+                          ] = pulse_rate_smooth * physunits.units.min**-1
+
+    return pulse_rate_ts
+
+def filter_pulse_rate(pulse_rate_ts: cdt.NDTimeSeries,
+                      fmin: float,
+                      fmax: float,
+                      butter_order: int = 4) -> cdt.NDTimeSeries:
+    """Filters the pulse rate time series created by the function "extract_pulse_rate"
+    by using a Butterworth bandpass filter (Cedalion function: freq_filter).
+    The time series "pulse_rate_filt" is added to the input NDTimeSeries.
+
+    Args:
+        pulse_rate_ts: pulse rate time series created by the function
+        'extract_pulse_rate'.
+        fmin: lower frequency border
+        fmax: upper freqency border
+        butter_order: order of Butterworth filter
+
+    Syntax:
+        pulse_rate_ts = filter_pulse_rate(
+            pulse_rate_ts,
+            fmin=0.1, fmax=0.45,
+            butter_order=2)
+    """  # noqa: D205
+
+    fmin = fmin * physunits.units.Hz
+    fmax = fmax * physunits.units.Hz
+
+    pulse_rate_smooth_ts = pulse_rate_ts.sel(compound="pulse_rate_smooth")
+
+    pulse_rate_filt_ts_help = freq_filter(pulse_rate_smooth_ts,
+                                     fmin,
+                                     fmax,
+                                     butter_order)
+    pulse_rate_filt_ts = pulse_rate_filt_ts_help.expand_dims(compound=['pulse_rate_filt'])  # noqa: E501
+    pulse_rate_ts_exp = xr.concat([pulse_rate_ts, pulse_rate_filt_ts], dim='compound')
+
+    return pulse_rate_ts_exp
+
+
+# --- BVP Plots -------------------
+
+def plot_concts_bvpts(bvp_cont: BVP_Container, ch: str) -> None:
+    """Creates a 2 x 1 subplot:
+        - Upper: upsampled HbO conc time series and its low frequency trend
+        - Lower: blood volume pulse time series and the respective systolic
+          maxima and diastoloc minima.
+
+    Args:
+        bvp_cont: the BVP Container which includes the blood volume pulse time series
+        created by the function "extract_bvp" and the two storages built by
+        the function "extract_waveforms".
+        ch: string that specifies the channel which sould be plotted.
+
+    Example:
+        plot_concts_bvpts(rec, "S1D15")
+    """  # noqa: D205
+
+    time_min = bvp_cont['bvp_ts'].time/60
+    source = bvp_cont['bvp_ts'].coords["source"].sel(channel=ch).item()
+    detector = bvp_cont['bvp_ts'].coords["detector"].sel(channel=ch).item()
+
+    fig, axes = plt.subplots(2, 1, figsize=(11, 8), constrained_layout=True)
+    plt.rcParams.update({'font.size': 10})
+    fig.patch.set_facecolor('white')
+
+    ax = axes[0]
+    ax.plot(time_min, bvp_cont['bvp_ts'].sel(compound='hbo_conc_ts_50hz', channel=ch),
+            color=[0.259, 0.478, 0.729], linewidth=0.5, label='[O₂Hb] raw data')
+    ax.plot(time_min, bvp_cont['bvp_ts'].sel(compound='low_freq_trend', channel=ch),
+            linewidth=1, color=[1, 0, 0], label='[O₂Hb] low—frequency trend')
+    ax.set_title('[O₂Hb] ('+source+' | '+detector+', $f_s$ = 50 Hz)',
+                  fontweight='bold', fontsize=14)
+    ax.set_xlabel('Time [min]')
+    ax.set_ylabel('[O₂Hb] [µM]')
+    ax.autoscale(enable=True, tight=True)
+    ax.legend(facecolor="white", framealpha=1)
+
+    ax = axes[1]
+    ax.plot(time_min, bvp_cont['bvp_ts'].sel(channel=ch, compound='bvp_ts'),
+            color=[0.259, 0.478, 0.729], linewidth=0.5)
+    ax.plot(time_min[bvp_cont.wav_storage_user[ch]['bvp_min_idx']],
+            bvp_cont.wav_storage_user[ch]['bvp_min_value'],
+            '+', color='r', markersize=8, linewidth=2, label='Minima')
+    ax.plot(time_min[bvp_cont.wav_storage_user[ch]['bvp_max_idx']],
+            bvp_cont.wav_storage_user[ch]['bvp_max_value'],
+            '+', color='k', markersize=8, linewidth=2, label='Maxima')
+    ax.set_title('Blood volume pulse (BVP) ('+source+' | '+detector+')',
+                  fontweight='bold', fontsize=14)
+    ax.set_xlabel('Time [min]')
+    ax.set_ylabel('BVP [µM]')
+    ax.autoscale(enable=True, tight=True)
+    ax.legend(facecolor="white", framealpha=1)
+
+    plt.show()
+
+def plot_wavs_4x(bvp_cont: BVP_Container, ch: str) -> None:
+    """Creates a 2 x 2 subplot:
+        - Upper left: BVP waveforms (not normalized).
+        - Upper right: BVP waveforms (detrended).
+        - Lower left: BVP waveforms (detrended + equal length).
+        - Lower right: BVP waveforms (detrended + equal length + z-score).
+
+    Args:
+        bvp_cont: the BVP Container which includes the two storages built by
+        the function "extract_waveforms". To create this storage a blood volume pulse
+        time series created by the function "extract_bvp" is necessary.
+        ch: string that specifies the channel which sould be plotted.
+
+    Example:
+        plot_wavs_4x(rec, "S1D15")
+    """  # noqa: D205
+
+    subplot_0_0 = bvp_cont.wav_storage_details[ch]['list_wav_raw_and_y_normal']
+    subplot_0_1 = subplot_0_0
+    subplot_1_0 = bvp_cont.wav_storage_details[ch]['nparray_wav_xy_normal_all']
+    subplot_1_1 = bvp_cont.wav_storage_details[ch]['nparray_wav_xy_normal_zscore_all']
+
+
+    fig, axes = plt.subplots(2, 2, figsize=(11,8))
+    plt.rcParams.update({'font.size': 10})
+    fig.patch.set_facecolor('white')
+
+    color_bvp = [0.259, 0.478, 0.729]
+
+    # --- Subplot (0,0) : BVP waveforms (not normalized) ---
+    ax = axes[0, 0]
+    for i in range(len(subplot_0_0)):
+        ax.plot(subplot_0_0[i]['wav_time_s'], subplot_0_0[i]['wav_raw'],
+                color=color_bvp, linewidth=0.5, alpha=0.2)
+    ax.set_title('BVP waveforms (raw data)',
+                 fontweight='bold', fontsize=12)
+    ax.set_xlabel('Time [s]')
+    ax.set_ylabel('[O₂Hb] [µM]')
+    ax.autoscale(enable=True, tight=True)
+
+    # --- Subplot (0,1) : BVP waveforms (detrended) ---
+    ax = axes[0, 1]
+    for i in range(len(subplot_0_1)):
+        ax.plot(subplot_0_1[i]['wav_time_s'], subplot_0_1[i]['wav_y_normal'],
+                color=color_bvp, linewidth=0.5, alpha=0.2)
+    ax.set_title('BVP waveforms (detrended)',
+                 fontweight='bold', fontsize=12)
+    ax.set_xlabel('Time [s]')
+    ax.set_ylabel('[O₂Hb] [AU]')
+    ax.autoscale(enable=True, tight=True)
+
+    # --- Subplot (1,0) : BVP waveforms (detrended + equal length) ---
+    ax = axes[1, 0]
+    ax.plot(subplot_1_0, color=color_bvp, linewidth=0.5, alpha=0.2)
+    ax.plot(np.mean(subplot_1_0, axis=1), color='r', linewidth=2)
+    ax.set_title('BVP waveforms (detrended, normalized: time)',
+                fontweight='bold', fontsize=10)
+    ax.set_xlabel('Time [samples]')
+    ax.set_ylabel('[O₂Hb] [AU]')
+    ax.autoscale(enable=True, tight=True)
+
+    # --- Subplot (1,1) : BVP waveforms (detrended + equal length + z-score) ---
+    ax = axes[1, 1]
+    ax.plot(subplot_1_1, color=color_bvp, linewidth=0.5, alpha=0.2)
+    ax.plot(np.mean(subplot_1_1, axis=1), color='r', linewidth=2)
+    ax.set_title('BVP waveforms (detrended, normalized: time, amplitude)',
+                fontweight='bold', fontsize=10)
+    ax.set_xlabel('Time [samples]')
+    ax.set_ylabel('[O₂Hb] [AU]')
+    ax.autoscale(enable=True, tight=True)
+    ax.axhline(1, color='k', linestyle='--', linewidth=0.5)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_wavs_woa(bvp_cont: BVP_Container, ch: str) -> None:
+    """Creates a 2 x 2 subplot:
+        - Upper left: Deviation metric curve.
+        - Upper right: Deviation metric histogram.
+        - Lower left: BVP waveforms (detrended + equal length).
+        - Lower right: BVP waveforms (detrended + equal length + z-score).
+
+    Args:
+        bvp_cont: the BVP Container which includes the two storages built by
+        the function "extract_waveforms" and edited by the function
+        "remove_artifact_waveforms". To create this storage a blood volume pulse
+        time series created by the function "extract_bvp" is necessary.
+        ch: string that specifies the channel which sould be plotted.
+
+    Example:
+        plot_wavs_woa(rec, "S1D15")
+    """  # noqa: D205
+
+    subplot_0_0 = bvp_cont.wav_storage_details[ch]['bvp_wav_dev']
+    subplot_0_1 = subplot_0_0
+    subplot_1_0 = bvp_cont.wav_storage_user[ch]['nparray_wav_xy_normal_all_woa']
+    subplot_1_1 = bvp_cont.wav_storage_user[ch]['nparray_wav_xy_normal_zscore_all_woa']  # noqa: E501
+
+
+    fig, axes = plt.subplots(2, 2, figsize=(11,8))
+    plt.rcParams.update({'font.size': 10})
+    fig.patch.set_facecolor('white')
+
+    color_bvp = [0.259, 0.478, 0.729]
+
+    # --- Subplot (0,0) : Waveform deviation index (WDI) curve ---
+    ax = axes[0, 0]
+    ax.plot(subplot_0_0, color=color_bvp, linewidth=0.8)
+    ax.set_title('Waveform deviation index (WDI)', fontweight='bold', fontsize=12)
+    ax.set_xlabel('BVP waveform [n]')
+    ax.set_ylabel('WDI')
+    ax.autoscale(enable=True, tight=True)
+    # percentile lines
+    ax.axhline(bvp_cont.wav_storage_details[ch]['P_025'],
+               color='r', linestyle='--', linewidth=1)
+    ax.axhline(bvp_cont.wav_storage_details[ch]['P_975'],
+               color='r', linestyle='--', linewidth=1)
+
+    # --- Subplot (1,1) : Waveform deviation index (WDI) histogram ---
+    ax = axes[0, 1]
+    ax.hist(subplot_0_1, bins=100, color=color_bvp)
+    ax.set_title('WDI distribution', fontweight='bold', fontsize=12)
+    ax.set_xlabel('WDI')
+    ax.set_ylabel('Count')
+    ax.autoscale(enable=True, tight=True)
+    # percentile lines
+    ax.axvline(bvp_cont.wav_storage_details[ch]['P_025'],
+               color='r', linestyle='--', linewidth=1)
+    ax.axvline(bvp_cont.wav_storage_details[ch]['P_975'],
+               color='r', linestyle='--', linewidth=1)
+
+    # --- Subplot (1,0) : BVP waveforms woa (detrended + equal length) ---
+    ax = axes[1, 0]
+    ax.plot(subplot_1_0, color=color_bvp, linewidth=0.5, alpha=0.1)
+    ax.plot(np.mean(subplot_1_0, axis=1), color='r', linewidth=2)
+    ax.set_title('BVP waveforms (detrended, normalized: time)',
+                fontweight='bold', fontsize=10)
+    ax.set_xlabel('Time [samples]')
+    ax.set_ylabel('[O₂Hb] [µM]')
+    ax.autoscale(enable=True, tight=True)
+
+    # --- Subplot (1,1) : BVP waveforms woa (detrended + equal length + z-score) ---
+    ax = axes[1, 1]
+    ax.plot(subplot_1_1, color=color_bvp, linewidth=0.5, alpha=0.1)
+    ax.plot(np.mean(subplot_1_1, axis=1), color='r', linewidth=2)
+    ax.set_title('BVP waveforms (detrended, normalized: time, amplitude)',
+                fontweight='bold', fontsize=10)
+    ax.set_xlabel('Time [samples]')
+    ax.set_ylabel('[O₂Hb] [AU]')
+    ax.autoscale(enable=True, tight=True)
+    ax.axhline(1, color='k', linestyle='--', linewidth=0.5)
+    ax.axhline(0, color='k', linestyle='--', linewidth=0.5)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_wavs_classes(bvp_cont: BVP_Container,
+                      ch: str,
+                      classification_index: str) -> None:
+    """Creates a 2 x 2 subplot:
+        - Upper left: Distribution of Max.
+        - Upper right: Waveforms Class S.
+        - Lower left: Waveforms Class M.
+        - Lower right: Waveforms Class L.
+    The Waveforms are detrended, equal lenth, zscored and without artefacts.
+
+    Args:
+        bvp_cont: the BVP Container which includes the two storages built by
+        the function "extract_waveforms", and edited by the function
+        "remove_artifact_waveforms" and "classify_waveforms". To create
+        this storage a blood volume pulse time series created by the function
+        "extract_bvp" is necessary.
+        ch: string that specifies the channel which sould be plotted.
+        classification_index: string that defines which classes should be plotted.
+        Use 'max' for the highest maximum of each xy-normalized and z-scored waveform,
+        and 'delta' for the vertical distance between the highest maximum and the
+        lowest local minimum of each xy-normalized waveform.
+
+    Example:
+        plot_wavs_classes(rec, "S1D15", 'delta')
+    """  # noqa: D205
+
+    if classification_index == 'max':
+        subplot_0_0 = bvp_cont.wav_storage_details[ch]['max_bvp_wav']
+        subplot_0_1 = bvp_cont.wav_storage_user[ch]['nparray_wav_max_type1']
+        subplot_1_0 = bvp_cont.wav_storage_user[ch]['nparray_wav_max_type2']
+        subplot_1_1 = bvp_cont.wav_storage_user[ch]['nparray_wav_max_type3']
+        title = 'Distribution of Max'
+        p25 = 'max_P_25'
+        p75 = 'max_P_75'
+
+    if classification_index == 'delta':
+        subplot_0_0 = bvp_cont.wav_storage_details[ch]['delta_bvp_wav']
+        subplot_0_1 = bvp_cont.wav_storage_user[ch]['nparray_wav_delta_type1']
+        subplot_1_0 = bvp_cont.wav_storage_user[ch]['nparray_wav_delta_type2']
+        subplot_1_1 = bvp_cont.wav_storage_user[ch]['nparray_wav_delta_type3']
+        title = 'Distribution of Delta'
+        p25 = 'delta_P_25'
+        p75 = 'delta_P_75'
+
+    fig, axes = plt.subplots(2, 2, figsize=(11,8))
+    plt.rcParams.update({'font.size': 10})
+    fig.patch.set_facecolor('white')
+
+    color_bvp = [0.259, 0.478, 0.729]
+
+    # --- (1) Histogram Distribution of Max ---
+    ax = axes[0, 0]
+    ax.hist(subplot_0_0, bins=100)
+    ax.set_title(title, fontweight='bold', fontsize=12)
+    ax.set_xlabel('Max')
+    ax.set_ylabel('Number')
+    ax.autoscale(enable=True, tight=True)
+    ax.axvline(bvp_cont.wav_storage_details[ch][p25], color='k', linestyle='--')
+    ax.axvline(bvp_cont.wav_storage_details[ch][p75], color='k', linestyle='--')
+
+    # --- (2) Class S ---
+    ax = axes[0, 1]
+    ax.plot(subplot_0_1, color=color_bvp, linewidth=0.5)
+    ax.plot(np.mean(subplot_0_1, axis=1), 'r', linewidth=2)
+    ax.set_title('BVP waveform: shape type 1', fontweight='bold', fontsize=12)
+    ax.set_xlabel('Time [samples]')
+    ax.set_ylabel('[O₂Hb] [AU]')
+    ax.autoscale(enable=True, tight=True)
+    if classification_index == 'max':
+        ax.axhline(1, color='k', linestyle='--', linewidth=0.5)
+
+    # --- (3) Class M ---
+    ax = axes[1, 0]
+    ax.plot(subplot_1_0, color=color_bvp, linewidth=0.5)
+    ax.plot(np.mean(subplot_1_0, axis=1), 'r', linewidth=2)
+    ax.set_title('BVP waveform: shape type 2', fontweight='bold', fontsize=12)
+    ax.set_xlabel('Time [samples]')
+    ax.set_ylabel('[O₂Hb] [AU]')
+    ax.autoscale(enable=True, tight=True)
+    if classification_index == 'max':
+        ax.axhline(1, color='k', linestyle='--', linewidth=0.5)
+
+    # --- (4) Class L ---
+    ax = axes[1, 1]
+    ax.plot(subplot_1_1, color=color_bvp, linewidth=0.5)
+    ax.plot(np.mean(subplot_1_1, axis=1), 'r', linewidth=2)
+    ax.set_title('BVP waveform: shape type 3', fontweight='bold', fontsize=12)
+    ax.set_xlabel('Time [samples]')
+    ax.set_ylabel('[O₂Hb] [AU]')
+    ax.autoscale(enable=True, tight=True)
+    if classification_index == 'max':
+        ax.axhline(1, color='k', linestyle='--', linewidth=0.5)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_bvpts_bvpats(bvp_cont: BVP_Container, ch: str) -> None:
+    """Creates a 2 x 1 subplot:
+        - Upper: blood volume pulse time series and the upper and lower envelopes
+        - Lower: blood volume pulse amplitude time series (raw and smoothed).
+
+    Args:
+        bvp_cont: the BVP Container which includes the blood volume pulse time series
+        created by the function "extract_bvp", the two storages built by
+        the function "extract_waveforms" and the blood volume pulse amplitude time
+        series creatd by the function "extract_bvpa".
+        ch: string that specifies the channel which sould be plotted.
+
+    Example:
+        plot_bvpts_bvpats(rec, "S1D15")
+    """  # noqa: D205
+
+    fig, axes = plt.subplots(2, 1, figsize=(13.5, 7), constrained_layout=True)
+    plt.rcParams.update({'font.size': 10})
+    fig.patch.set_facecolor('white')
+
+    source = bvp_cont['bvp_ts'].coords["source"].sel(channel=ch).item()
+    detector = bvp_cont['bvp_ts'].coords["detector"].sel(channel=ch).item()
+
+    # Subplot: bvp_ts + env_up + env_down
+    ax = axes[0]
+    ax.plot(bvp_cont['bvp_ts'].time/60,
+            bvp_cont['bvp_ts'].sel(channel=ch, compound="bvp_ts"),
+            color=[0.259, 0.478, 0.729], linewidth=0.5)
+    ax.plot(bvp_cont['bvpa_ts'].time/60,
+            bvp_cont['bvpa_ts'].sel(channel=ch, compound="env_up"),
+            color='r', linewidth=0.5, label='Upper envelope')
+    ax.plot(bvp_cont['bvpa_ts'].time/60,
+            bvp_cont['bvpa_ts'].sel(channel=ch, compound="env_down"),
+            color='tab:orange', linewidth=0.5, label='Lower envelope')
+    ax.autoscale(enable=True, tight=True)
+    ax.set_title('Blood volume pulse (BVP) ('+source+' | '+detector+')')
+    ax.set_xlabel('Time [min]')
+    ax.set_ylabel('BVP [µM]')
+    ax.legend(facecolor="white", framealpha=1)
+
+    # Subplot: bvpa_raw + bvpa_smooth
+    ax = axes[1]
+    ax.plot(bvp_cont['bvpa_ts'].time/60,
+            bvp_cont['bvpa_ts'].sel(channel=ch, compound="bvpa_raw"),
+            color=[0.259, 0.478, 0.729], linewidth=0.5, label='Raw')
+    ax.plot(bvp_cont['bvpa_ts'].time/60,
+            bvp_cont['bvpa_ts'].sel(channel=ch, compound="bvpa_smooth"),
+            color='r', linewidth=0.5, label='Smooth')
+    ax.autoscale(enable=True, tight=True)
+    ax.set_title('Blood volume pulse amplitude (BVPA) ('+source+' | '+detector+')')
+    ax.set_xlabel('Time [min]')
+    ax.set_ylabel('BVPA [µM]')
+    ax.legend(facecolor="white", framealpha=1)
+
+    plt.show()
+
+def plot_pulse_rate(bvp_cont: BVP_Container, ch: str) -> None:
+    """Creates a plot including the pulse rate and its shmoothed version.
+
+    Args:
+        bvp_cont: the BVP Container which includes the blood volume pulse time series
+        created by the function "extract_bvp", the two storages built by
+        the function "extract_waveforms" and the pulse rate time
+        series creatd by the function "extract_pulse_rate".
+        ch: string that specifies the channel which sould be plotted.
+
+    Example:
+        plot_pulse_rate(rec, "S1D15")
+    """  # noqa: D205
+
+    fig, ax = plt.subplots(figsize=(13.5, 7), constrained_layout=True)
+    plt.rcParams.update({'font.size': 10})
+    fig.patch.set_facecolor('white')
+
+    source = bvp_cont['bvp_ts'].coords["source"].sel(channel=ch).item()
+    detector = bvp_cont['bvp_ts'].coords["detector"].sel(channel=ch).item()
+
+    ax.plot(bvp_cont['pulse_rate_ts'].time/60,
+            bvp_cont['pulse_rate_ts'].sel(channel=ch, compound="pulse_rate"),
+            color=[0.259, 0.478, 0.729], linewidth=0.5, label="Raw")
+    ax.plot(bvp_cont['pulse_rate_ts'].time/60,
+            bvp_cont['pulse_rate_ts'].sel(channel=ch, compound="pulse_rate_smooth"),  # noqa: E501
+            color='r', linewidth=0.5, label="Smooth")
+    ax.autoscale(enable=True, tight=True)
+    ax.set_title('Pulse rate (PR) ('+source+' | '+detector+')')
+    ax.set_xlabel('Time [min]')
+    ax.set_ylabel('PR [1/min]')
+    ax.legend(facecolor="white", framealpha=1)
+
+    plt.show()
+
+def plot_bvpa_pr_comparison(bvp_cont: BVP_Container, ch: str) -> None:
+    """Creates a 2 x 1 subplot:
+        - Upper: BVPA + Pulse Rate (seperate y axes).
+        - Lower: Pulse Rate filtered.
+
+    Args:
+        bvp_cont: the BVP Container which includes the blood volume pulse time series
+        created by the function "extract_bvp", the two storages built by
+        the function "extract_waveforms", the blood volume pulse amplitude time
+        series creatd by the function "extract_bvpa", and the pulse rate time
+        series creatd by the function "extract_pulse_rate" and edited by the function
+        "filter_pulse_rate".
+        ch: string that specifies the channel which sould be plotted.
+
+    Example:
+        plot_bvpa_pr_comparison(rec, "S1D15")
+    """  # noqa: D205
+
+    fig, axes = plt.subplots(2, 1, figsize=(13.5, 7), constrained_layout=True)
+    plt.rcParams.update({'font.size': 10})
+    fig.patch.set_facecolor('white')
+
+    color_bvpa = [0.259, 0.478, 0.729]
+    color_pr  = [0.959, 0.278, 0.329]
+
+    pulse_rate_filtered = (
+        bvp_cont['pulse_rate_ts'].sel(channel=ch, compound="pulse_rate_smooth") -
+        bvp_cont['pulse_rate_ts'].sel(channel=ch, compound="pulse_rate_filt"))
+
+    ax = axes[0]
+    ax.plot(
+        bvp_cont['bvpa_ts'].time / 60,
+        bvp_cont['bvpa_ts'].sel(channel=ch, compound="bvpa_smooth"),
+        color=color_bvpa,
+        linewidth=0.5,
+        label='BVPA'
+    )
+    ax.set_ylabel('BVPA [AU]')
+    ax.set_xlabel('Time [min]')
+    ax.set_zorder(1)
+
+    ax_pr = ax.twinx()
+    ax_pr.plot(
+        bvp_cont['pulse_rate_ts'].time / 60,
+        bvp_cont['pulse_rate_ts'].sel(channel=ch, compound="pulse_rate_smooth"),
+        color=color_pr,
+        linewidth=0.5,
+        label='Pulse Rate'
+    )
+    ax_pr.set_ylabel('Pulse Rate [1/min]')
+    ax_pr.set_zorder(0)
+
+    ax.set_title('BVPA and Pulse Rate')
+    lines_bvpa, labels_bvpa = ax.get_legend_handles_labels()
+    lines_pr, labels_pr = ax_pr.get_legend_handles_labels()
+    legend = ax.legend(lines_bvpa + lines_pr, labels_bvpa + labels_pr,
+                       facecolor="white", framealpha=1)
+    legend.set_zorder(10)
+    ax.autoscale(enable=True, tight=True)
+    ax.patch.set_visible(False)
+
+    ax = axes[1]
+    ax.plot(bvp_cont['pulse_rate_ts'].time/60,
+            pulse_rate_filtered,
+            color=color_pr, linewidth=0.5)
+    ax.autoscale(enable=True, tight=True)
+    ax.set_title('Pulse Rate filtered')
+    ax.set_xlabel('Time [min]')
+    ax.set_ylabel('Pulse Rate [1/min]')
+
+    plt.show()
+
+def plot_concts_bvpats_pr(bvp_cont: BVP_Container, ch: str) -> None:
+    """Creates a 3 x 1 subplot:
+        - Upper: upsampled HbO conc time series and its low frequency trend
+        - Middle: blood volume pulse amplitude time series smoothed.
+        - Lower: pulse rate and its shmoothed version.
+
+    Args:
+        bvp_cont: the BVP Container which includes the blood volume pulse time series
+        created by the function "extract_bvp", the two storages built by
+        the function "extract_waveforms", the blood volume pulse amplitude time
+        series creatd by the function "extract_bvpa" and the pulse rate time
+        series creatd by the function "extract_pulse_rate".
+        ch: string that specifies the channel which sould be plotted.
+
+    Example:
+        plot_concts_bvpats_pr(rec, "S1D15")
+    """  # noqa: D205
+
+    time_min = bvp_cont['bvp_ts'].time/60
+
+    fig, axes = plt.subplots(3, 1, figsize=(11, 8), constrained_layout=True)
+    plt.rcParams.update({'font.size': 10})
+    fig.patch.set_facecolor('white')
+
+    source = bvp_cont['bvp_ts'].coords["source"].sel(channel=ch).item()
+    detector = bvp_cont['bvp_ts'].coords["detector"].sel(channel=ch).item()
+
+    ax = axes[0]
+    ax.plot(time_min, bvp_cont['bvp_ts'].sel(compound='hbo_conc_ts_50hz', channel=ch),
+            color=[0.259, 0.478, 0.729], linewidth=0.5, label='HbO concentration')
+    ax.plot(time_min, bvp_cont['bvp_ts'].sel(compound='low_freq_trend', channel=ch),
+            linewidth=1, color=[1, 0, 0], label='low frequency trend')
+    ax.set_title('[O₂Hb] ('+source+' | '+detector+')',
+                  fontweight='bold', fontsize=14)
+    ax.set_xlabel('Time [min]')
+    ax.set_ylabel('[O₂Hb] [µM]')
+    ax.autoscale(enable=True, tight=True)
+    ax.legend(facecolor="white", framealpha=1)
+
+    ax = axes[1]
+    ax.plot(time_min, bvp_cont['bvpa_ts'].sel(channel=ch, compound="bvpa_smooth"), color='r', linewidth=0.5)  # noqa: E501
+    ax.autoscale(enable=True, tight=True)
+    ax.set_title('BVPA ('+source+' | '+detector+')')
+    ax.set_xlabel('Time [min]')
+    ax.set_ylabel('BVPA [µM]')
+
+    ax = axes[2]
+    ax.plot(time_min, bvp_cont['pulse_rate_ts'].sel(channel=ch, compound="pulse_rate"),  # noqa: E501
+            color=[0.259, 0.478, 0.729], linewidth=0.5, label="pulse rate")
+    ax.plot(time_min, bvp_cont['pulse_rate_ts'].sel(channel=ch, compound="pulse_rate_smooth"),  # noqa: E501
+            color='r', linewidth=0.5, label="pulse rate smooth")
+    ax.autoscale(enable=True, tight=True)
+    ax.set_title('PR ('+source+' | '+detector+')')
+    ax.set_xlabel('Time [min]')
+    ax.set_ylabel('Pulse Rate [1/min]')
+    ax.legend(facecolor="white", framealpha=1)
