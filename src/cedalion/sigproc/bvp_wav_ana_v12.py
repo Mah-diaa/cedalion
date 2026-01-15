@@ -16,9 +16,14 @@ from scipy.stats import zscore
 from skmisc.loess import loess
 import tkinter as tk
 import xarray as xr
-import pycwt as wavelet
+from pycwt.wavelet import _check_parameter_wavelet, cwt, wct_significance
+from pycwt.helpers import ar1
+
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.gridspec import GridSpec
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.ticker import MaxNLocator
 
 import cedalion.typing as cdt
 from cedalion import physunits
@@ -257,6 +262,143 @@ def cmap_parula():
 
     return parula
 
+def wct(
+    y1,
+    y2,
+    dt,
+    dj=1 / 12,
+    s0=-1,
+    J=-1,
+    sig=True,
+    significance_level=0.95,
+    wavelet="morlet",
+    normalize=True,
+    **kwargs,
+):
+    """Copy of Wavelet coherence transform (WCT) from pycwt with two modifications.
+
+    1)
+    Original: aWCT = numpy.angle(W12)
+    Modification: numpy.angle(S12)
+    2)
+    Original: return WCT, aWCT, coi, freq, sig
+    Modification: return S12, S1, S2, WCT, aWCT, coi, freq, sig
+
+    The WCT finds regions in time frequency space where the two time
+    series co-vary, but do not necessarily have high power.
+
+    Parameters
+    ----------
+    y1, y2 : numpy.ndarray, list
+        Input signals.
+    dt : float
+        Sample spacing.
+    dj : float, optional
+        Spacing between discrete scales. Default value is 1/12.
+        Smaller values will result in better scale resolution, but
+        slower calculation and plot.
+    s0 : float, optional
+        Smallest scale of the wavelet. Default value is 2*dt.
+    J : float, optional
+        Number of scales less one. Scales range from s0 up to
+        s0 * 2**(J * dj), which gives a total of (J + 1) scales.
+        Default is J = (log2(N*dt/so))/dj.
+    sig : bool
+        set to compute signficance, default is True
+    significance_level (float, optional) :
+        Significance level to use. Default is 0.95.
+    normalize (boolean, optional) :
+        If set to true, normalizes CWT by the standard deviation of
+        the signals.
+
+    Returns:
+    -------
+    WCT : magnitude of coherence
+    aWCT : phase angle of coherence
+    coi (array like):
+        Cone of influence, which is a vector of N points containing
+        the maximum Fourier period of useful information at that
+        particular time. Periods greater than those are subject to
+        edge effects.
+    freq (array like):
+        Vector of Fourier equivalent frequencies (in 1 / time units)    coi :
+    sig :  Significance levels as a function of scale
+       if sig=True when called, otherwise zero.
+    S12 : smoothed, scale-corrected Cross-Wavelet-Transform
+    S1: smoothed continous wavelet transform of signal 1
+    S2: smoothed continous wavelet transform of signal 2
+
+    See also:
+    --------
+    cwt, xwt
+
+    """  # noqa: D405
+
+    wavelet = _check_parameter_wavelet(wavelet)
+
+    # Checking some input parameters
+    if s0 == -1:
+        # Number of scales
+        s0 = 2 * dt / wavelet.flambda()
+    if J == -1:
+        # Number of scales
+        J = int(np.round(np.log2(y1.size * dt / s0) / dj))
+
+    # Makes sure input signals are np arrays.
+    y1 = np.asarray(y1)
+    y2 = np.asarray(y2)
+    # Calculates the standard deviation of both input signals.
+    std1 = y1.std()
+    std2 = y2.std()
+    # Normalizes both signals, if appropriate.
+    if normalize:
+        y1_normal = (y1 - y1.mean()) / std1
+        y2_normal = (y2 - y2.mean()) / std2
+    else:
+        y1_normal = y1
+        y2_normal = y2
+
+    # Calculates the CWT of the time-series making sure the same parameters
+    # are used in both calculations.
+    _kwargs = dict(dj=dj, s0=s0, J=J, wavelet=wavelet)
+    W1, sj, freq, coi, _, _ = cwt(y1_normal, dt, **_kwargs)
+    W2, sj, freq, coi, _, _ = cwt(y2_normal, dt, **_kwargs)
+
+    scales1 = np.ones([1, y1.size]) * sj[:, None]
+    scales2 = np.ones([1, y2.size]) * sj[:, None]
+
+    # Smooth the wavelet spectra before truncating.
+    S1 = wavelet.smooth(np.abs(W1) ** 2 / scales1, dt, dj, sj)
+    S2 = wavelet.smooth(np.abs(W2) ** 2 / scales2, dt, dj, sj)
+
+    # Now the wavelet transform coherence
+    W12 = W1 * W2.conj()
+    scales = np.ones([1, y1.size]) * sj[:, None]
+    S12 = wavelet.smooth(W12 / scales, dt, dj, sj)
+    WCT = np.abs(S12) ** 2 / (S1 * S2)
+    aWCT = np.angle(S12)
+
+    # Calculates the significance using Monte Carlo simulations with 95%
+    # confidence as a function of scale.
+    if sig:
+        a1, b1, c1 = ar1(y1)
+        a2, b2, c2 = ar1(y2)
+
+        sig = wct_significance(
+            a1,
+            a2,
+            dt=dt,
+            dj=dj,
+            s0=s0,
+            J=J,
+            significance_level=significance_level,
+            wavelet=wavelet,
+            **kwargs,
+        )
+    else:
+        sig = np.asarray([0])
+
+    return S12, S1, S2, WCT, aWCT, coi, freq, sig
 
 # --- BVP Analysis -------------------
 
@@ -1110,7 +1252,8 @@ def calc_wavelet_coherence(
     fs = float(fs_qty.to('Hz').magnitude)
     dt = 1.0 / fs
 
-    ch_list = ts_1.channel.values
+    # ch_list = ts_1.channel.values
+    ch_list = ["S1D15"]
 
     for ch in ch_list:
         y_ts_1 = ts_1.sel(channel=ch).to_numpy()
@@ -1135,7 +1278,7 @@ def calc_wavelet_coherence(
             J = int(np.log2(n * dt / s0) / dj)
 
         # ----- calculate wavelet coherence -----
-        WCT, aWCT, coi, freq, significance = wavelet.wct(
+        S12, S1, S2, WCT, aWCT, coi, freq, significance = wct(
             y_ts_1, y_ts_2, dt, dj=dj, s0=s0, J=J,
             normalize=do_zscore,
             sig=do_sig,
@@ -1148,6 +1291,9 @@ def calc_wavelet_coherence(
         wav_storage_details[ch]["frequency"] = freq
         wav_storage_details[ch]["significance"] = significance
         wav_storage_details[ch]["wc_time"] = time
+        wav_storage_details[ch]["cross_wavelet_transform"] = S12
+        wav_storage_details[ch]["cwt_signal1"] = S1
+        wav_storage_details[ch]["cwt_signal2"] = S2
 
     return wav_storage_details
 
@@ -1603,7 +1749,7 @@ def plot_bvpa_pr_comparison(bvp_cont: BVP_Container, ch: str) -> None:
     ax_pr.set_ylabel('Pulse Rate [1/min]')
     ax_pr.set_zorder(0)
 
-    ax.set_title('BVPA and Pulse Rate')
+    ax.set_title('BVPA and PR')
     lines_bvpa, labels_bvpa = ax.get_legend_handles_labels()
     lines_pr, labels_pr = ax_pr.get_legend_handles_labels()
     legend = ax.legend(lines_bvpa + lines_pr, labels_bvpa + labels_pr,
@@ -1617,7 +1763,7 @@ def plot_bvpa_pr_comparison(bvp_cont: BVP_Container, ch: str) -> None:
             pulse_rate_filtered,
             color=color_pr, linewidth=0.5)
     ax.autoscale(enable=True, tight=True)
-    ax.set_title('Pulse Rate filtered')
+    ax.set_title('PR filtered')
     ax.set_xlabel('Time [min]')
     ax.set_ylabel('Pulse Rate [1/min]')
 
@@ -1706,6 +1852,9 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
     freq = bvp_cont.wav_storage_details[ch]["frequency"]
     significance = bvp_cont.wav_storage_details[ch]["significance"]
     time = bvp_cont.wav_storage_details[ch]["wc_time"]
+    S12 = bvp_cont.wav_storage_details[ch]["cross_wavelet_transform"]
+    S1 = bvp_cont.wav_storage_details[ch]["cwt_signal1"]
+    S2 = bvp_cont.wav_storage_details[ch]["cwt_signal2"]
     n = time.size
 
     fs_qty = sampling_rate(bvp_cont['bvpa_ts'])
@@ -1715,29 +1864,74 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
     source = bvp_cont['bvp_ts'].coords["source"].sel(channel=ch).item()
     detector = bvp_cont['bvp_ts'].coords["detector"].sel(channel=ch).item()
 
-    # ----- Plot: Coherence-Scalogram -----
-    fig, ax = plt.subplots(figsize=(12, 6))
+    # ----- PLOT -----
+    fig = plt.figure(figsize=(13.5, 7))
+    gs = GridSpec(2, 2, figure=fig, width_ratios=[5, 1],
+                  height_ratios=[1, 1], wspace=0.08, hspace=0.3)
+    plt.rcParams.update({'font.size': 10})
+    fig.patch.set_facecolor('white')
+    fig.subplots_adjust(left=0.06, right=0.94, top=0.96, bottom=0.08)
 
+    color_bvpa = [0.259, 0.478, 0.729]
+    color_pr  = [0.959, 0.278, 0.329]
+
+    # ----- Comparison BVPA and PR
+    ax_top = fig.add_subplot(gs[0, :])
+    ax_top.plot(bvp_cont['bvpa_ts'].time / 60,
+                bvp_cont['bvpa_ts'].sel(channel=ch, compound="bvpa_smooth"),
+                color=color_bvpa, linewidth=0.5, label='BVPA'
+    )
+    ax_top.set_ylabel('BVPA [AU]')
+    ax_top.set_xlabel('Time [min]')
+    ax_top.set_zorder(1)
+
+    ax_top_pr = ax_top.twinx()
+    ax_top_pr.plot(bvp_cont['pulse_rate_ts'].time / 60,
+                   bvp_cont['pulse_rate_ts'].sel(channel=ch, compound="pulse_rate_smooth"),
+                   color=color_pr, linewidth=0.5, label='Pulse Rate')
+    ax_top_pr.set_ylabel('Pulse Rate [1/min]')
+    ax_top_pr.set_zorder(0)
+    ax_top_pr.autoscale(enable=True, tight=True)
+
+    ax_top.set_title("BVPA and PR ("+source+" | "+detector+")")
+    lines_bvpa, labels_bvpa = ax_top.get_legend_handles_labels()
+    lines_pr, labels_pr = ax_top_pr.get_legend_handles_labels()
+    legend = ax_top.legend(lines_bvpa + lines_pr, labels_bvpa + labels_pr,
+                       facecolor="white", framealpha=1,#
+                       loc="upper right")
+    legend.set_zorder(10)
+
+    ax_top.xaxis.set_major_locator(MaxNLocator(nbins=14, prune=None))
+    ax_top.patch.set_visible(False)
+
+    # ----- Coherence-Scalogram
+    ax_bottom_left = fig.add_subplot(gs[1, 0])
+
+    # Color bar
     levels = np.linspace(0, 1, 50)
     cmap = cmap_parula()
-    cf = ax.contourf(time, np.log2(freq), WCT, levels=levels, cmap=cmap, vmin=0, vmax=1)
-    cbar = fig.colorbar(cf, ax=ax)
-    cbar.set_label("Magnitude-squared coherence")
-    cbar.set_ticks(np.arange(0, 1.01, 0.1))
+    cf = ax_bottom_left.contourf(time, np.log2(freq), WCT, levels=levels,
+                                 cmap=cmap, vmin=0, vmax=1)
 
-    ax.set_title("BVPA vs PR ("+source+" | "+detector+")")
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Frequency [Hz]")
+    divider = make_axes_locatable(ax_bottom_left)
+    cax = divider.append_axes("right", size="3%", pad=0.03)
+
+    cbar = fig.colorbar(cf, cax=cax)
+    cbar.set_ticks(np.arange(0, 1.01, 0.2))
+
+    ax_bottom_left.set_title("Magnitude-squared coherence")
+    ax_bottom_left.set_xlabel("Time [s]")
+    ax_bottom_left.set_ylabel("Frequency [Hz]")
 
     yticks = np.array([0.01, 0.03, 0.05, 0.1, 0.2, 0.5, 1, 2])
-    ax.set_yticks(np.log2(yticks))
-    ax.set_yticklabels([f"{v:g}" for v in yticks])
+    ax_bottom_left.set_yticks(np.log2(yticks))
+    ax_bottom_left.set_yticklabels([f"{v:g}" for v in yticks])
+    ax_bottom_left.set_ylim(np.log2(freq.min()), np.log2(2))
 
-    # ----- Cone of Influence (COI) -----
+    # Cone of Influence (COI)
     coi = np.asarray(coi)
     coi_freq = 1.0 / coi
-
-    ax.fill_between(
+    ax_bottom_left.fill_between(
         time,
         np.log2(freq.min()) * np.ones_like(time),
         np.log2(coi_freq),
@@ -1747,18 +1941,20 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
         linewidth=0.2,
     )
 
-    # ----- Significance -----
+    # Significance
     if not significance == [0]:
         sig_arr = np.asarray(significance)
 
         if sig_arr.ndim == 1 and sig_arr.size == WCT.shape[0]:
             sig2d = sig_arr[:, None] * np.ones_like(WCT)
-            ax.contour(time, np.log2(freq), WCT - sig2d, levels=[0], linewidths=1.0)
+            ax_bottom_left.contour(time, np.log2(freq), WCT - sig2d,
+                                   levels=[0], linewidths=1.0)
 
         elif sig_arr.ndim == 2 and sig_arr.shape == WCT.shape:
-            ax.contour(time, np.log2(freq), WCT - sig_arr, levels=[0], linewidths=1.0)
+            ax_bottom_left.contour(time, np.log2(freq), WCT - sig_arr,
+                                   levels=[0], linewidths=1.0)
 
-    # ----- Phase-Arrows -----
+    # Phase-Arrows
     TT, FF = np.meshgrid(time, freq)
 
     inside_coi = FF >= coi_freq[np.newaxis, :]
@@ -1775,20 +1971,48 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
     U = np.cos(phi_sub)
     V = np.sin(phi_sub)
 
-    ax.quiver(
+    ax_bottom_left.quiver(
         T_sub[mask_sub],
         np.log2(P_sub[mask_sub]),
         U[mask_sub],
         V[mask_sub],
         angles="xy",
-        scale=50,
+        scale=70,
         pivot="mid",
         width=0.0025,
         headwidth=3,
         headlength=4
     )
 
-    ax.set_ylim(np.log2(freq.min()), np.log2(freq.max()))
+    # ----- Means of coherence and phase over time
+    S12_real = np.real(S12)
+    S12_img = np.imag(S12)
+    mean_help = np.sqrt((np.mean(S12_real, 1) **2) + (np.mean(S12_img, 1) **2))
+    mean_coherence = np.abs(mean_help) ** 2 / np.mean((S1 * S2), axis=1)
+    mean_phase = (np.mean(aWCT, axis=1) / np.pi) * 180
 
-    plt.tight_layout()
+    ax_bottom_right = fig.add_subplot(gs[1, 1])
+    ax_bottom_right.plot(mean_coherence, np.log2(freq),
+                         color=color_bvpa, linewidth=1)
+    ax_bottom_right.set_xlabel('Mean coherence (blue)')
+    ax_bottom_right.set_xticks(np.arange(0, 1.0001, 0.2))
+    ax_bottom_right.set_xlim(0, 1.001)
+    ax_bottom_right.set_ylabel('')
+    ax_bottom_right.set_yticks(np.log2(yticks))
+    ax_bottom_right.set_yticklabels([f"{v:g}" for v in yticks])
+    ax_bottom_right.yaxis.tick_right()
+    ax_bottom_right.yaxis.set_label_position("right")
+    ax_bottom_right.set_ylim(np.log2(freq.min()), np.log2(2))
+    ax_bottom_right.set_zorder(1)
+
+    ax_bottom_right_phase = ax_bottom_right.twiny()
+    ax_bottom_right_phase.plot(mean_phase, np.log2(freq),
+        color=color_pr, linewidth=1)
+    ax_bottom_right_phase.set_xlabel('Mean phase (red)')
+    ax_bottom_right_phase.set_zorder(0)
+    ax_bottom_right_phase.set_xlim(-181, 181)
+    ax_bottom_right_phase.set_xticks(np.arange(-180, 181, 90))
+
+    ax_bottom_right.patch.set_visible(False)
+
     plt.show()
