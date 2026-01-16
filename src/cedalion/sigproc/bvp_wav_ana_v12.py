@@ -12,7 +12,7 @@ from numpy.typing import ArrayLike
 from typing import Dict, Tuple, Any
 from scipy.interpolate import PchipInterpolator
 from scipy.signal import detrend
-from scipy.stats import zscore
+from scipy.stats import zscore, circmean
 from skmisc.loess import loess
 import tkinter as tk
 import xarray as xr
@@ -273,8 +273,7 @@ def wct(
     significance_level=0.95,
     wavelet="morlet",
     normalize=True,
-    **kwargs,
-):
+    **kwargs):
     """Copy of Wavelet coherence transform (WCT) from pycwt with two modifications.
 
     1)
@@ -1203,15 +1202,14 @@ def filter_pulse_rate(pulse_rate_ts: cdt.NDTimeSeries,
 
     return pulse_rate_ts_exp
 
-def calc_wavelet_coherence(
-                            ts_1: cdt.NDTimeSeries,
-                            ts_2: cdt.NDTimeSeries,
-                            wav_storage_details: dict,
-                            dj=1/12, s0=None, J=None,
-                            do_zscore=True, do_detrend=True, do_sig=False,
-                            significance_level=0.95
-                            ):
-    """Calculates the wavelet coherence for two time series.
+def calc_wav_coh_bvpa_pr(ts_1: cdt.NDTimeSeries,
+                           ts_2: cdt.NDTimeSeries,
+                           wav_storage_details: dict,
+                           dj=1/12, s0=None, J=None,
+                           do_zscore=True, do_detrend=True, do_sig=False,
+                           significance_level=0.95
+                           ):
+    """Calculates the wavelet coherence between BVPA and PR time series.
 
        Mother-function = Morlet.
 
@@ -1826,11 +1824,14 @@ def plot_concts_bvpats_pr(bvp_cont: BVP_Container, ch: str) -> None:
     ax.set_ylabel('Pulse Rate [1/min]')
     ax.legend(facecolor="white", framealpha=1)
 
-def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
+def plot_coh_ana_bvpa_pr(bvp_cont: BVP_Container, ch: str,
                            coherence_thresh=0.9,
                            arrow_step_time=30,
                            arrow_step_period: int=4) -> None:
-    """Creates a ...... subplot.
+    """Comprehensive plot for analyzing the coherence between BVPA and PR.
+
+    The mean phase is calculated for the whole frequency range but plotted only for
+    the frequencies where arrwos are plotted.
 
     Args:
         bvp_cont: BVP Container which includes the blood volume pulse time series
@@ -1851,7 +1852,7 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
     coi = bvp_cont.wav_storage_details[ch]["cone_of_interest"]
     freq = bvp_cont.wav_storage_details[ch]["frequency"]
     significance = bvp_cont.wav_storage_details[ch]["significance"]
-    time = bvp_cont.wav_storage_details[ch]["wc_time"]
+    time = bvp_cont.wav_storage_details[ch]["wc_time"] / 60
     S12 = bvp_cont.wav_storage_details[ch]["cross_wavelet_transform"]
     S1 = bvp_cont.wav_storage_details[ch]["cwt_signal1"]
     S2 = bvp_cont.wav_storage_details[ch]["cwt_signal2"]
@@ -1866,8 +1867,8 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
 
     # ----- PLOT -----
     fig = plt.figure(figsize=(13.5, 7))
-    gs = GridSpec(2, 2, figure=fig, width_ratios=[5, 1],
-                  height_ratios=[1, 1], wspace=0.08, hspace=0.3)
+    gs = GridSpec(2, 2, figure=fig, width_ratios=[7, 1],
+                  height_ratios=[1, 1], wspace=0.08, hspace=0.27)
     plt.rcParams.update({'font.size': 10})
     fig.patch.set_facecolor('white')
     fig.subplots_adjust(left=0.06, right=0.94, top=0.96, bottom=0.08)
@@ -1889,11 +1890,11 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
     ax_top_pr.plot(bvp_cont['pulse_rate_ts'].time / 60,
                    bvp_cont['pulse_rate_ts'].sel(channel=ch, compound="pulse_rate_smooth"),
                    color=color_pr, linewidth=0.5, label='Pulse Rate')
-    ax_top_pr.set_ylabel('Pulse Rate [1/min]')
+    ax_top_pr.set_ylabel('PR [1/min]')
     ax_top_pr.set_zorder(0)
     ax_top_pr.autoscale(enable=True, tight=True)
 
-    ax_top.set_title("BVPA and PR ("+source+" | "+detector+")")
+    ax_top.set_title("BVPA and PR ("+source+" | "+detector+")", fontweight='bold')
     lines_bvpa, labels_bvpa = ax_top.get_legend_handles_labels()
     lines_pr, labels_pr = ax_top_pr.get_legend_handles_labels()
     legend = ax_top.legend(lines_bvpa + lines_pr, labels_bvpa + labels_pr,
@@ -1919,14 +1920,14 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
     cbar = fig.colorbar(cf, cax=cax)
     cbar.set_ticks(np.arange(0, 1.01, 0.2))
 
-    ax_bottom_left.set_title("Magnitude-squared coherence")
-    ax_bottom_left.set_xlabel("Time [s]")
-    ax_bottom_left.set_ylabel("Frequency [Hz]")
-
+    ax_bottom_left.set_title("Magnitude-squared coherence", fontweight='bold')
+    ax_bottom_left.set_xlabel("Time [min]")
+    ax_bottom_left.xaxis.set_major_locator(MaxNLocator(nbins=14, prune=None))
     yticks = np.array([0.01, 0.03, 0.05, 0.1, 0.2, 0.5, 1, 2])
     ax_bottom_left.set_yticks(np.log2(yticks))
     ax_bottom_left.set_yticklabels([f"{v:g}" for v in yticks])
     ax_bottom_left.set_ylim(np.log2(freq.min()), np.log2(2))
+    ax_bottom_left.set_ylabel("Frequency [Hz]")
 
     # Cone of Influence (COI)
     coi = np.asarray(coi)
@@ -1971,30 +1972,26 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
     U = np.cos(phi_sub)
     V = np.sin(phi_sub)
 
-    ax_bottom_left.quiver(
-        T_sub[mask_sub],
-        np.log2(P_sub[mask_sub]),
-        U[mask_sub],
-        V[mask_sub],
-        angles="xy",
-        scale=70,
-        pivot="mid",
-        width=0.0025,
-        headwidth=3,
-        headlength=4
-    )
+    ax_bottom_left.quiver(T_sub[mask_sub], np.log2(P_sub[mask_sub]),
+                        U[mask_sub], V[mask_sub],
+                        angles="uv", pivot="mid",
+                        scale_units="width", scale=100,
+                        width=0.001, headwidth=6, headlength=7)
 
     # ----- Means of coherence and phase over time
     S12_real = np.real(S12)
     S12_img = np.imag(S12)
-    mean_help = np.sqrt((np.mean(S12_real, 1) **2) + (np.mean(S12_img, 1) **2))
+    mean_help = np.sqrt((np.mean(S12_real, axis=1) **2)+(np.mean(S12_img, axis=1) **2))
     mean_coherence = np.abs(mean_help) ** 2 / np.mean((S1 * S2), axis=1)
-    mean_phase = (np.mean(aWCT, axis=1) / np.pi) * 180
+    mean_phase = np.rad2deg(np.angle(np.mean(np.exp(1j * aWCT), axis=1)))
+
+    freq_has_arrows = np.any(mask_sub, axis=1)
+    freq_plot = np.log2(freq[si][freq_has_arrows])
+    mean_phase_plot = mean_phase[si][freq_has_arrows]
 
     ax_bottom_right = fig.add_subplot(gs[1, 1])
     ax_bottom_right.plot(mean_coherence, np.log2(freq),
-                         color=color_bvpa, linewidth=1)
-    ax_bottom_right.set_xlabel('Mean coherence (blue)')
+                         color=cmap(0.8), linewidth=2, label="Mean coherence")
     ax_bottom_right.set_xticks(np.arange(0, 1.0001, 0.2))
     ax_bottom_right.set_xlim(0, 1.001)
     ax_bottom_right.set_ylabel('')
@@ -2006,13 +2003,25 @@ def plot_wavelet_coherence(bvp_cont: BVP_Container, ch: str,
     ax_bottom_right.set_zorder(1)
 
     ax_bottom_right_phase = ax_bottom_right.twiny()
-    ax_bottom_right_phase.plot(mean_phase, np.log2(freq),
-        color=color_pr, linewidth=1)
-    ax_bottom_right_phase.set_xlabel('Mean phase (red)')
+    ax_bottom_right_phase.barh(freq_plot, mean_phase_plot,
+                               color='k', linewidth=1, label="Mean phase [deg]",
+                               height=(freq_plot[0]-freq_plot[1])*0.5)
     ax_bottom_right_phase.set_zorder(0)
     ax_bottom_right_phase.set_xlim(-181, 181)
     ax_bottom_right_phase.set_xticks(np.arange(-180, 181, 90))
 
     ax_bottom_right.patch.set_visible(False)
+
+    lines_coh, labels_coh = ax_bottom_right.get_legend_handles_labels()
+    lines_ph, labels_ph = ax_bottom_right_phase.get_legend_handles_labels()
+    leg_coh = ax_bottom_right.legend(lines_coh, labels_coh,
+                                    facecolor="white", framealpha=1,
+                                    loc="lower right", fontsize=7)
+    leg_coh.set_zorder(10)
+    leg_ph = ax_bottom_right_phase.legend(lines_ph, labels_ph,
+                                    facecolor="white", framealpha=1,
+                                    loc="upper right", fontsize=7,
+                                    handleheight=0.3)
+    leg_ph.set_zorder(10)
 
     plt.show()
