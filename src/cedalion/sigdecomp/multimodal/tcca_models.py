@@ -314,8 +314,7 @@ class ElasticNetTCCA(MultimodalSourceDecompositionWithTemporalEmbedding):
         # Validates input data and returns it ordered as (sample_name, feature_name)
         X, Y = self.validate_inputs_fit(X, Y)
 
-        # Check right format for time shifts and return them in the right order and
-        # including zero shift
+        # Check right format for time shifts and return them in the right order
         self.time_shifts = validate_time_shifts(
             T=X.time[-1], time_shifts=self.time_shifts
         )
@@ -501,8 +500,7 @@ class StructuredSparseTCCA(MultimodalSourceDecompositionWithTemporalEmbedding):
         # Validates input data and returns it ordered as (sample_name, feature_name)
         X, Y = self.validate_inputs_fit(X, Y)
 
-        # Check right format for time shifts and return them in the right order and
-        # including tau=0
+        # Check right format for time shifts and return them in the right order
         self.time_shifts = validate_time_shifts(
             T=X.time[-1], time_shifts=self.time_shifts
         )

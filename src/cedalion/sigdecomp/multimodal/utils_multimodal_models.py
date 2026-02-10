@@ -128,7 +128,7 @@ def validate_time_shifts(T : float,
     """Corroborate that time shifts have the right format and are within the data domain.
 
     This method checks that the time shifts are positive and within the data domain. It also
-    order the shifts in ascending order and adds zero lag at the beginning of the series if not present.
+    order the shifts in ascending order.
 
     Args:
         T (float): Maximum time of the data.
@@ -149,9 +149,6 @@ def validate_time_shifts(T : float,
     # Catch out of domain shift
     if tmax >= T:
         raise ValueError(f"Maximum time shift {tmax} cannot be bigger than largest time in data {T}")
-    # If not present, add tau=0 (no-shift) as first shift
-    if tmin:
-        time_shifts = np.insert(time_shifts, 0, 0.0)
 
     return time_shifts
 

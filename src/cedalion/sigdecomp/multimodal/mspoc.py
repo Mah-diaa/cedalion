@@ -121,8 +121,7 @@ class mSPoC:
         e_len = self.Ntx // self.Nty  # Epoch length
         time = Y.time.data
 
-        # Check right format for time shifts and return them in the right order and
-        # including zero lag
+        # Check right format for time shifts and return them in the right order
         self.time_shifts = validate_time_shifts(
             T=X.time[-1], time_shifts=self.time_shifts
         )
@@ -546,7 +545,7 @@ def temporal_embedding(
         dimensions += [f"aux{i + 1}" for i in range(X.ndim - 1)]
     X = xr.DataArray(data=X, dims=dimensions, coords={"time": time})
 
-    # Read and initial and final time
+    # Read initial and final time
     ti = X.time[0].data
     Nt = len(X.time)
     X_emb_list = []
