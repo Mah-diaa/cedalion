@@ -1013,6 +1013,7 @@ class ImageRecon:
         *,
         alpha_meas: float = 0.001,
         alpha_spatial: float | None = None,
+        lambda_R_conc: float | None = None,  
         apply_c_meas: bool = False,
         recon_mode: ReconMode = "mua",
         brain_only: bool = False,
@@ -1030,6 +1031,7 @@ class ImageRecon:
         self.alpha_meas = alpha_meas
         self.alpha_spatial = alpha_spatial
         self.apply_c_meas = apply_c_meas
+        self.lambda_R_conc = lambda_R_conc
 
         self.sbf = spatial_basis_functions
         self.Adot = Adot # FIXME can we remove this?
@@ -1040,8 +1042,8 @@ class ImageRecon:
         # These would invalidate when Adot or reg./sbf. params. change. Changing
         # these requires a new instance of ImageRecon, so they are considered constants
         # here. Depending on recon_mode they have different shapes.
-        self._D: xr.DataArray = None  # Linv^2 * A.T
-        self._F: xr.DataArray = None  # A_hat * A_hat.T
+        self._D: xr.DataArray = None  # R * A.T
+        self._F: xr.DataArray = None  # A @ R @ A.T
 
         # The matrix to transform from absorption changes to concentrations
         self._mua2conc : xr.DataArray = None
@@ -1262,15 +1264,46 @@ class ImageRecon:
         else:
             D = self._D
 
-
         if self.recon_mode == "conc":
             return self._calculate_W_conc(D, C_meas)
         if self.recon_mode in ["mua", "mua2conc"]:
             return self._calculate_W_mua(D, C_meas)
-
+    
 
     # --- MATRIX COMPUTATION METHODS ---
-    def _calculate_DF(self, A):
+    def _calculate_prior_R(self, A: xr.DataArray):
+        """
+        Compute spatial regularization prior (column scaling matrix).
+        
+        Calculates diagonal regularization matrix based on forward model sensitivity:
+        R_j = 1 / (sum_i A_ij^2 + λ_spatial) where λ_spatial is scaled by max sensitivity.
+        Vertices with high sensitivity get less regularization; low sensitivity vertices
+        are smoothed more heavily.
+        
+        Parameters:
+        A : numpy.ndarray or xr.DataArray
+            Forward model matrix with shape (n_channels, n_vertices) or similar.
+        alpha_spatial : float
+            Spatial regularization weight controlling smoothness strength.
+        
+        Returns:
+        R : numpy.ndarray or xr.DataArray
+            Diagonal regularization matrix (as 1D array of diagonal elements)
+            with same shape as columns of A.
+        """
+
+        B = np.sum((A ** 2), axis=0)
+        b = B.max()
+        
+        lambda_spatial = self.alpha_spatial * b
+        
+        L = np.sqrt(B + lambda_spatial)
+        Linv = 1/L
+        R = Linv**2         
+        
+        return R
+    
+    def _calculate_DF(self, A: xr.DataArray):
         """Calculate intermediate D and F matrices for regularization.
 
         Args:
@@ -1288,23 +1321,15 @@ class ImageRecon:
             F_xr = xr.DataArray(F, dims=(f"{dim}_1", f"{dim}_2"))
             D_xr = None
         else:
-            B = np.sum((A**2), axis=0)
-            b = B.max()
-
-            # GET A_HAT
-            lambda_spatial = self.alpha_spatial * b
-
-            L = np.sqrt(B + lambda_spatial)
-            Linv = 1/L.values
-            # Linv = np.diag(Linv)
-
-            A_hat = A * Linv
-            dim = A_hat.dims[0]
+            #% GET spatial prior R
+            R = self._calculate_prior_R(A)            
+            AR = A * R
+            dim = AR.dims[0]
 
             #% GET F and D
-            F = A_hat.values @ A_hat.values.T
-            D = Linv[:, np.newaxis]**2 * A.values.T
-
+            F = AR @ A.T
+            D = R[:, np.newaxis] * A.values.T
+            
             if self.sbf:
                 if self.recon_mode in ["mua", "mua2conc"]:
                     vertex_dim = "kernel"
@@ -1324,7 +1349,6 @@ class ImageRecon:
             #D_xr = xr.DataArray(D, dims=("flat_vertex", "flat_channel"))
             D_xr = xr.DataArray(D, dims=(vertex_dim, channel_dim))
             D_xr = D_xr.assign_coords(xrutils.coords_from_other(A,dims=D_xr.dims))
-
             F_xr = xr.DataArray(F, dims=(f"{dim}_1", f"{dim}_2"))
 
         return D_xr, F_xr
@@ -1373,7 +1397,7 @@ class ImageRecon:
         return D, F
 
 
-    def _calculate_W(self, A, F, c_meas=None):
+    def _calculate_W(self, A, F, lambda_R, c_meas=None):
         """Calculate pseudoinverse W from sensitivity and regularization.
 
         Args:
@@ -1385,15 +1409,13 @@ class ImageRecon:
             xr.DataArray: pseudoinverse W.
         """
 
-        max_eig = np.max(np.linalg.eigvalsh(F)) # F~=AA^T is real and symmetric
-        lambda_meas = self.alpha_meas * max_eig
+        lambda_meas = lambda_R * self.alpha_meas * np.max(np.linalg.eigvals(F)) 
 
         # A is 2D. Either (vertex x channel) or (kernel x channel)
-
         if c_meas is not None:
-            W = A.values @ np.linalg.inv(F.values + lambda_meas * c_meas)
+            W = lambda_R * A.values @ np.linalg.inv(lambda_R * F.values + lambda_meas * c_meas)
         else:
-            W = A.values @ np.linalg.inv(F.values + lambda_meas * np.eye(A.shape[1]))
+            W = lambda_R * A.values @ np.linalg.inv(lambda_R * F.values + lambda_meas * np.eye(A.shape[1]))
 
         vertex_dim = A.dims[0] # flat_vertex, flat_kernel, kernel
         channel_dim = A.dims[1] # flat_channel, channel
@@ -1436,6 +1458,7 @@ class ImageRecon:
                 dimension.
         """
         W = []
+        lambda_R_indirect = self.compute_lambda_R_indirect()
         for wavelength in A.wavelength:
             if c_meas is not None:
                 c_meas_w = c_meas.sel(wavelength=wavelength)
@@ -1446,6 +1469,7 @@ class ImageRecon:
             W_xr = self._calculate_W(
                 A.sel(wavelength=wavelength),
                 self._F.sel(wavelength=wavelength),
+                lambda_R_indirect.sel(wavelength=wavelength),
                 c_meas_w,
             )
             W.append(W_xr)
@@ -1456,7 +1480,6 @@ class ImageRecon:
         return W_xr
 
     # --- IMAGE RECONSTRUCTION METHODS ---
-
     def _get_image_conc(self, y: cdt.NDTimeSeries) -> cdt.NDTimeSeries:
         y = fwm.stack_flat_channel(y)
         y = y.reset_index("flat_channel")
@@ -1476,7 +1499,6 @@ class ImageRecon:
             )
 
         conc_img = xrutils.contract(W, y, "flat_channel")
-
 
         if self.sbf is None:
             conc_img = fwm.unstack_flat_vertex(conc_img)
@@ -1605,6 +1627,104 @@ class ImageRecon:
         # Create properly formatted xarray
         #return self._create_mua_dataarray(noise_var, c_meas, time_dim)
 
+    def get_image_noise_posterior(self, c_meas : xr.DataArray | None = None):
+        """
+        Compute posterior variance of reconstructed images.
+        
+        Calculates the diagonal of the posterior covariance matrix:
+        Cov(X|y) = R - R * A^T @ (F + λ*C)^(-1) @ A * R
+        where R is the spatial prior. Returns only the diagonal (variance at each vertex).
+        
+        Parameters:
+            c_meas : Measurement covariance matrix.
+        
+        Returns:
+            xr.DataArray: Posterior variance of reconstructed images.
+        """
+
+        c_meas, new_W_input_hash = self._update_and_hash_cmeas(c_meas)
+
+        # (re-)calculate W when C_meas is new
+        if (self._W_input_hash is None) or (new_W_input_hash != self._W_input_hash):
+            self._W_input_hash = new_W_input_hash
+            self._W = self._get_W(c_meas)
+
+        if self.recon_mode == "conc":
+            conc_img = self._get_posterior_cov_conc()
+            return conc_img
+
+        elif self.recon_mode in ["mua", "mua2conc"]:
+            mua_img = self._get_posterior_cov_mua()
+            if self.recon_mode == "mua":
+                return mua_img
+            else:
+                return xrutils.contract(
+                    self._mua2conc**2, mua_img / units.mm**2, "wavelength"
+                )
+        else:
+            raise ValueError()  # unreachable
+
+    def _get_posterior_cov_conc(self):
+        
+        A = self.Adot
+        Adot_stacked = fwm.ForwardModel.compute_stacked_sensitivity(A)
+        W = self._W
+        R = self._calculate_prior_R(Adot_stacked, self.alpha_spatial)
+        R = self.lambda_R_conc * R
+
+        # ---------------------------------------------------------
+        #  Posterior variance (diagonal only)
+        # mse_post(j) = R_j * (1 - (W A^T)_{jj})
+        # ---------------------------------------------------------
+        s = np.sum(W * Adot_stacked.T, axis=1)   # elementwise multiply row i with column i
+        mse_post = R * (1.0 - s)
+
+        if self.sbf is not None:
+            mse_post = self.sbf.kernel_to_image_space_conc(mse_post)
+
+        return mse_post
+
+    def _get_posterior_cov_mua(self):
+        """
+        Compute W and mse_post for a given wavelength using
+        spatial regularization (via column scaling) and
+        measurement regularization in data space.
+        """
+        A = self.Adot
+        W = self._W
+        lambda_R_indirect = self.compute_lambda_R_indirect()
+        mse_lst = []
+
+        # ---------------------------------------------------------
+        # 2) Spatial regularization: R = diag(1 / (B + λ_spatial))
+        # ---------------------------------------------------------
+        for wl in A.wavelength:
+
+            lambda_R_wl = lambda_R_indirect.sel(wavelength=wl).values
+
+            A_wl = A.sel(wavelength=wl).values
+            W_wl = W.sel(wavelength=wl).values
+
+            R = self._calculate_prior_R(A_wl, self.alpha_spatial)
+            R = lambda_R_wl * R
+
+            # ---------------------------------------------------------
+            # Posterior variance (diagonal only)
+            # mse_post(j) = R_j * (1 - (W A^T)_{jj})
+            # ---------------------------------------------------------
+            s = np.sum(W_wl * A_wl.T, axis=1)   # elementwise multiply row i with column i
+            mse_post = R * (1.0 - s)
+            mse_lst.append(mse_post)
+
+        mse_post_xr = xr.DataArray(mse_lst, 
+                                dims = ['wavelength', 'vertex'],
+                                coords = {'wavelength': A.wavelength })
+    
+        if self.sbf is not None:
+            mse_post_xr = self.sbf.kernel_to_image_space_mua(mse_post_xr)
+
+        return mse_post_xr
+
     # --- HELPER METHODS FOR IMAGE COMPUTATION ---
 
     def _get_time_dimension(self, data: xr.DataArray) -> str | None:
@@ -1644,4 +1764,45 @@ class ImageRecon:
         weighted = W_expanded * c_sqrt
         return np.nansum(weighted**2, axis=1)  # (vertex, time)
 
+    def compute_lambda_R_indirect(self):
+        """
+        Compute wavelength-specific prior scaling parameter for indirect reconstruction.
+        
+        Scales lambda_R to ensure consistency between direct
+        (chromophore space) and indirect (wavelength space) methods. Uses extinction
+        coefficients to relate chromophore regularization strength to OD regularization.
+        
+        Returns:
+        lambda_R_indirect : xr.DataArray
+            Wavelength-specific parameter with dimension (wavelength,).
+            Scaled to match direct method's effective regularization strength.
 
+        """
+
+        conc2mua = nirs.get_extinction_coefficients('prahl', self.Adot.wavelength)
+
+        A_stacked = fwm.ForwardModel.compute_stacked_sensitivity(self.Adot)
+        nV_brain = self.Adot.is_brain.sum().values
+        nV_head = self.Adot.shape[1]
+
+        R_direct = self._calculate_prior_R(A_stacked, alpha_spatial=self.alpha_spatial)
+        R_direct = self.lambda_R_conc * R_direct
+
+        R_direct_max = [R_direct[:nV_brain].max().values, R_direct[nV_head:nV_head+nV_brain].max().values]
+
+        # Convert direct prior to indirect (OD space)
+        R_indirect_wl1 = self._calculate_prior_R(self.Adot.isel(wavelength=0), alpha_spatial=self.alpha_spatial)
+        R_indirect_wl2 = self._calculate_prior_R(self.Adot.isel(wavelength=1), alpha_spatial=self.alpha_spatial)
+
+        R_indirect_converted = xrutils.contract(
+                    conc2mua**2, R_direct_max / units.mm**2, "wavelength"
+                )
+        
+        lambda_wl1 = R_indirect_converted[0] / R_indirect_wl1[:nV_brain].max()
+        lambda_wl2 = R_indirect_converted[1] / R_indirect_wl2[:nV_brain].max()
+
+        lambda_R_indirect = xr.DataArray([lambda_wl1, lambda_wl2], 
+                                    dims=['wavelength'],
+                                    coords={'wavelength': self.Adot.wavelength})
+
+        return lambda_R_indirect
