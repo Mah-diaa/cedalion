@@ -1327,8 +1327,8 @@ class ImageRecon:
             dim = AR.dims[0]
 
             #% GET F and D
-            F = AR @ A.T
-            D = R[:, np.newaxis] * A.values.T
+            F = AR.values @ A.values.T
+            D = R.values[:, np.newaxis] * A.values.T
             
             if self.sbf:
                 if self.recon_mode in ["mua", "mua2conc"]:
@@ -1443,7 +1443,7 @@ class ImageRecon:
             c_meas = fwm.stack_flat_channel(c_meas)
             c_meas = np.diag(c_meas)
 
-        return self._calculate_W(A, self._F, c_meas)
+        return self._calculate_W(A, self._F, self.lambda_R_conc, c_meas)
 
 
     def _calculate_W_mua(self, A, c_meas=None):
@@ -1469,7 +1469,7 @@ class ImageRecon:
             W_xr = self._calculate_W(
                 A.sel(wavelength=wavelength),
                 self._F.sel(wavelength=wavelength),
-                lambda_R_indirect.sel(wavelength=wavelength),
+                lambda_R_indirect.sel(wavelength=wavelength).values,
                 c_meas_w,
             )
             W.append(W_xr)
@@ -1491,7 +1491,7 @@ class ImageRecon:
                 i for i in self._W.flat_channel.values if i in y.flat_channel.values
             ]
             y = y.sel(flat_channel = sel_channels)
-            W = self._W.sel(flat_channel=sel_channels)
+            W = self._W.sel(flat_channel = sel_channels)
         except KeyError:
             raise ValueError(
                 "This time series contains channel(s) which is/are not in the "
@@ -1666,10 +1666,15 @@ class ImageRecon:
 
     def _get_posterior_cov_conc(self):
         
-        A = self.Adot
-        Adot_stacked = fwm.ForwardModel.compute_stacked_sensitivity(A)
+        if self.sbf is not None:
+            A = self.sbf.H
+            Adot_stacked = fwm.ForwardModel.compute_stacked_sensitivity(A)
+        else:
+            A = self.Adot
+            Adot_stacked = fwm.ForwardModel.compute_stacked_sensitivity(A)
+
         W = self._W
-        R = self._calculate_prior_R(Adot_stacked, self.alpha_spatial)
+        R = self._calculate_prior_R(Adot_stacked)
         R = self.lambda_R_conc * R
 
         # ---------------------------------------------------------
@@ -1680,7 +1685,10 @@ class ImageRecon:
         mse_post = R * (1.0 - s)
 
         if self.sbf is not None:
-            mse_post = self.sbf.kernel_to_image_space_conc(mse_post)
+            mse_post = self.sbf.kernel_to_image_space_conc(mse_post).T
+        else:
+            mse_post = fwm.unstack_flat_vertex(mse_post)
+
 
         return mse_post
 
@@ -1690,22 +1698,23 @@ class ImageRecon:
         spatial regularization (via column scaling) and
         measurement regularization in data space.
         """
-        A = self.Adot
-        W = self._W
+        if self.sbf is not None:
+            A = self.sbf.H
+        else:
+            A = self.Adot
+
         lambda_R_indirect = self.compute_lambda_R_indirect()
         mse_lst = []
+        W = self._W
 
-        # ---------------------------------------------------------
-        # 2) Spatial regularization: R = diag(1 / (B + λ_spatial))
-        # ---------------------------------------------------------
         for wl in A.wavelength:
 
             lambda_R_wl = lambda_R_indirect.sel(wavelength=wl).values
 
-            A_wl = A.sel(wavelength=wl).values
-            W_wl = W.sel(wavelength=wl).values
+            A_wl = A.sel(wavelength=wl)
+            W_wl = W.sel(wavelength=wl)
 
-            R = self._calculate_prior_R(A_wl, self.alpha_spatial)
+            R = self._calculate_prior_R(A_wl)
             R = lambda_R_wl * R
 
             # ---------------------------------------------------------
@@ -1716,10 +1725,8 @@ class ImageRecon:
             mse_post = R * (1.0 - s)
             mse_lst.append(mse_post)
 
-        mse_post_xr = xr.DataArray(mse_lst, 
-                                dims = ['wavelength', 'vertex'],
-                                coords = {'wavelength': A.wavelength })
-    
+        mse_post_xr = xr.concat(mse_lst, dim='wavelength')
+
         if self.sbf is not None:
             mse_post_xr = self.sbf.kernel_to_image_space_mua(mse_post_xr)
 
@@ -1730,6 +1737,12 @@ class ImageRecon:
     def _get_time_dimension(self, data: xr.DataArray) -> str | None:
         """Detect time dimension in data."""
         for dim in ['time', 'reltime']:
+            if dim in data.dims:
+                return dim
+        return None
+
+    def _get_spatial_dimension(self, data: xr.DataArray) -> str | None:
+        for dim in ['vertex', 'kernel', 'parcel', 'channel']:
             if dim in data.dims:
                 return dim
         return None
@@ -1785,18 +1798,16 @@ class ImageRecon:
         nV_brain = self.Adot.is_brain.sum().values
         nV_head = self.Adot.shape[1]
 
-        R_direct = self._calculate_prior_R(A_stacked, alpha_spatial=self.alpha_spatial)
+        R_direct = self._calculate_prior_R(A_stacked)
         R_direct = self.lambda_R_conc * R_direct
 
         R_direct_max = [R_direct[:nV_brain].max().values, R_direct[nV_head:nV_head+nV_brain].max().values]
 
         # Convert direct prior to indirect (OD space)
-        R_indirect_wl1 = self._calculate_prior_R(self.Adot.isel(wavelength=0), alpha_spatial=self.alpha_spatial)
-        R_indirect_wl2 = self._calculate_prior_R(self.Adot.isel(wavelength=1), alpha_spatial=self.alpha_spatial)
+        R_indirect_wl1 = self._calculate_prior_R(self.Adot.isel(wavelength=0))
+        R_indirect_wl2 = self._calculate_prior_R(self.Adot.isel(wavelength=1))
 
-        R_indirect_converted = xrutils.contract(
-                    conc2mua**2, R_direct_max / units.mm**2, "wavelength"
-                )
+        R_indirect_converted = conc2mua.values**2 @ R_direct_max  #/ units.mm**2
         
         lambda_wl1 = R_indirect_converted[0] / R_indirect_wl1[:nV_brain].max()
         lambda_wl2 = R_indirect_converted[1] / R_indirect_wl2[:nV_brain].max()
