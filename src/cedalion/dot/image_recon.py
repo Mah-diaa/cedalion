@@ -1689,6 +1689,7 @@ class ImageRecon:
         else:
             mse_post = fwm.unstack_flat_vertex(mse_post)
 
+        mse_post = mse_post.pint.quantify('molar**2') # FIXME should probably not assume units here
 
         return mse_post
 
