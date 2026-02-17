@@ -7,6 +7,9 @@
 #       in extract_waveforms integriert.
 #  - classify_waveforms: Klassifizierung nach delta hinzugefügt.
 
+# Nochmal überprüfen
+#  - interpft auch für downsampling erweitert
+
 import numpy as np
 from numpy.typing import ArrayLike
 from typing import Dict, Tuple, Any
@@ -85,7 +88,8 @@ def interpft(x, ny):
     X = np.fft.fft(x)
 
     # Lower half incl. Nyquist
-    nyq = int(np.ceil((m + 1) / 2))
+                # nyq = int(np.ceil((m + 1) / 2))
+    nyq = int(np.ceil((min(m, ny) + 1) / 2))     # NEU
 
     # New frequency-domain array
     Y = np.zeros(ny, dtype=complex)
@@ -94,12 +98,18 @@ def interpft(x, ny):
     Y[:nyq] = X[:nyq]
 
     # Copy upper frequencies (mirror side)
-    Y[ny - (m - nyq) + 1:] = X[nyq + 1:]
+                # Y[ny - (m - nyq) + 1:] = X[nyq + 1:]
+    n_upper = min(m - nyq, ny - nyq)            # NEU
+    if n_upper > 0:                             # NEU
+        Y[-n_upper:] = X[-n_upper:]             # NEU
 
     # Even length: split Nyquist term
-    if m % 2 == 0:
-        Y[nyq] = X[nyq] / 2
-        Y[nyq + ny - m] = X[nyq] / 2
+                # if m % 2 == 0:
+                #     Y[nyq] = X[nyq] / 2
+                #     Y[nyq + ny - m] = X[nyq] / 2
+    if (m % 2 == 0) and (ny % 2 == 0) and (nyq < ny) and (nyq < m): # NEU
+        Y[nyq] = X[nyq] / 2                                         # NEU
+        Y[-nyq] = X[nyq] / 2                                        # NEU
 
     # IFFT
     y = np.fft.ifft(Y)
@@ -337,7 +347,7 @@ def wct(
 
     # Checking some input parameters
     if s0 == -1:
-        # Number of scales
+        # smallest scale
         s0 = 2 * dt / wavelet.flambda()
     if J == -1:
         # Number of scales
@@ -401,7 +411,7 @@ def wct(
 
 # --- BVP Analysis -------------------
 
-def extract_bvp(hbo_conc_ts: cdt.NDTimeSeries) -> cdt.NDTimeSeries:
+def extract_bvp(hbo_conc_ts: cdt.NDTimeSeries, fs_new = 50) -> cdt.NDTimeSeries:
     """Extracts the blood volume pulsation (BVP) time series from an
     HbO concentration time series.
 
@@ -410,6 +420,7 @@ def extract_bvp(hbo_conc_ts: cdt.NDTimeSeries) -> cdt.NDTimeSeries:
     Args:
         hbo_conc_ts: HbO concentration time series from which the BVP
             signal should be extracted.
+        fs_new: new sampling rate
 
     Returns:
         NDTimeSeries containing:
@@ -432,7 +443,7 @@ def extract_bvp(hbo_conc_ts: cdt.NDTimeSeries) -> cdt.NDTimeSeries:
     fs = float(fs_qty.to('Hz').magnitude)
 
     # --- Target sampling rate for BVP analysis
-    fs_new = 50
+    fs_new = fs_new
 
     # --- Extract channel list and generate new time vector after resampling
     ch_list = hbo_conc_ts.channel.values
@@ -702,7 +713,7 @@ def extract_waveforms(
             "bvp_max_value": bvp_max_value,
             "bvp_max_idx": bvp_max_idx,
             "bvp_min_value": minima_value,
-            "bvp_min_idx": minima_idx,}
+            "bvp_min_idx": minima_idx}
         wav_storage_details[ch] ={
             "list_wav_raw_and_y_normal": bvp_waveforms,
             "nparray_wav_xy_normal_all": bvp_wav_xy_normal_all,
@@ -1314,7 +1325,7 @@ def plot_concts_bvpts(bvp_cont: BVP_Container, ch: str) -> None:
         plot_concts_bvpts(bvp_cont, "S1D15")
     """  # noqa: D205
 
-    time_min = bvp_cont['bvp_ts'].time/60
+    time_min = bvp_cont['bvp_ts'].time
     source = bvp_cont['bvp_ts'].coords["source"].sel(channel=ch).item()
     detector = bvp_cont['bvp_ts'].coords["detector"].sel(channel=ch).item()
 
