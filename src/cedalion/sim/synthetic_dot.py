@@ -19,7 +19,7 @@ import mne
 import cedalion
 from cedalion.sim import synthetic_hrf
 from cedalion import units
-import forward_model_local as fw  # local version of forward_model, to allow modifications
+import cedalion.sim.forward_model_local as fw  # local version of forward_model, to allow modifications
 import cedalion.dataclasses as cdc
 from cedalion.dataclasses import PointType
 import cedalion.geometry.landmarks
@@ -33,8 +33,8 @@ import cedalion.vis.blocks as vbx
 import cedalion.vis.anatomy
 import cedalion.vis.anatomy.sensitivity_matrix
 
-from utils_plots import plot_activation, plot_parcellated_surface
-from source_simulator import SourcesConfig
+from cedalion.sim.utils_plots import plot_activation, plot_parcellated_surface
+from cedalion.sim.source_simulator import SourcesConfig
 
 class SimulatefNIRSAndEEGData():
     """ Simulate fNIRS and EEG data from specified sources and head model on top of real background data.    
