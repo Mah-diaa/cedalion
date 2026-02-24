@@ -809,14 +809,14 @@ def remove_artifact_waveforms(
 
 def classify_waveforms(
         bvp_cont: BVP_Container,
-        classification_index: str) -> Tuple[
+        classification_metric: str) -> Tuple[
         Dict[str, Dict[str, Any]],
         Dict[str, Dict[str, Any]]
     ]:
     """Classifies artifact-cleaned BVP waveforms based on their
     systolic peak amplitudes.
 
-    For each channel, the classification index is computed (see section Args).
+    For each channel, the classification metric is computed (see section Args).
     Waveforms are then classified into three amplitude-based groups using
     percentile thresholds:
         - type 1:  < 25th percentile
@@ -829,7 +829,7 @@ def classify_waveforms(
         "remove_artifact_waveforms" and "classify_waveforms". To create
         this storage a blood volume pulse time series created by the function
         "extract_bvp" is necessary.
-        classification_index: string that defines which index is used
+        classification_metric: string that defines which metric is used
         for classification. Use 'max' for using the highest maximum of each
         xy-normalized and z-scored waveform, and 'delta' for using the vertical
         distance between the highest maximum and the lowest local minimum
@@ -861,7 +861,7 @@ def classify_waveforms(
     wav_storage_user = bvp_cont.wav_storage_user
     wav_storage_details= bvp_cont.wav_storage_details
 
-    if classification_index == 'max':
+    if classification_metric == 'max':
     # --- Iterate over all channels ---
         for ch in bvp_ts.channel.values:
 
@@ -895,7 +895,7 @@ def classify_waveforms(
             wav_storage_details[ch]["max_P_25"] = p25
             wav_storage_details[ch]["max_P_75"] = p75
 
-    if classification_index == 'delta':
+    if classification_metric == 'delta':
     # --- Iterate over all channels ---
         for ch in bvp_ts.channel.values:
 
@@ -1581,7 +1581,7 @@ def plot_wavs_classes(bvp_cont: BVP_Container,
 
     # --- (2) Class S ---
     ax = axes[0, 1]
-    ax.plot(subplot_0_1, color=color_bvp, linewidth=0.5)
+    ax.plot(subplot_0_1, color=color_bvp, linewidth=0.5, alpha=0.1)
     ax.plot(np.mean(subplot_0_1, axis=1), 'r', linewidth=2)
     ax.set_title('BVP waveform: shape type 1', fontweight='bold', fontsize=12)
     ax.set_xlabel('Time [samples]')
@@ -1592,7 +1592,7 @@ def plot_wavs_classes(bvp_cont: BVP_Container,
 
     # --- (3) Class M ---
     ax = axes[1, 0]
-    ax.plot(subplot_1_0, color=color_bvp, linewidth=0.5)
+    ax.plot(subplot_1_0, color=color_bvp, linewidth=0.5, alpha=0.1)
     ax.plot(np.mean(subplot_1_0, axis=1), 'r', linewidth=2)
     ax.set_title('BVP waveform: shape type 2', fontweight='bold', fontsize=12)
     ax.set_xlabel('Time [samples]')
@@ -1603,7 +1603,7 @@ def plot_wavs_classes(bvp_cont: BVP_Container,
 
     # --- (4) Class L ---
     ax = axes[1, 1]
-    ax.plot(subplot_1_1, color=color_bvp, linewidth=0.5)
+    ax.plot(subplot_1_1, color=color_bvp, linewidth=0.5, alpha=0.1)
     ax.plot(np.mean(subplot_1_1, axis=1), 'r', linewidth=2)
     ax.set_title('BVP waveform: shape type 3', fontweight='bold', fontsize=12)
     ax.set_xlabel('Time [samples]')
