@@ -1309,7 +1309,7 @@ def calc_wav_coh_bvpa_pr(ts_1: cdt.NDTimeSeries,
 
 # --- BVP Plots -------------------
 
-def plot_concts_bvpts(bvp_cont: BVP_Container, ch: str) -> None:
+def plot_concts_bvpts(bvp_cont: BVP_Container, ch: str, container_name: str = "") -> None:
     """Creates a 2 x 1 subplot:
         - Upper: upsampled HbO conc time series and its low frequency trend
         - Lower: blood volume pulse time series and the respective systolic
@@ -1320,6 +1320,7 @@ def plot_concts_bvpts(bvp_cont: BVP_Container, ch: str) -> None:
         created by the function "extract_bvp" and the two storages built by
         the function "extract_waveforms".
         ch: string that specifies the channel which sould be plotted.
+        container_name: name of BVP Container.
 
     Example:
         plot_concts_bvpts(bvp_cont, "S1D15")
@@ -1360,6 +1361,12 @@ def plot_concts_bvpts(bvp_cont: BVP_Container, ch: str) -> None:
     ax.set_ylabel('BVP [µM]')
     ax.autoscale(enable=True, tight=True)
     ax.legend(facecolor="white", framealpha=1)
+
+    if not container_name == '':
+        fig.tight_layout(rect=[0, 0, 1, 0.965])
+        fig.suptitle(container_name, fontsize=14)
+    else:
+        plt.tight_layout()
 
     plt.show()
 
@@ -1438,7 +1445,7 @@ def plot_wavs_4x(bvp_cont: BVP_Container, ch: str) -> None:
     plt.tight_layout()
     plt.show()
 
-def plot_wavs_woa(bvp_cont: BVP_Container, ch: str) -> None:
+def plot_wavs_woa(bvp_cont: BVP_Container, ch: str, container_name: str = "") -> None:
     """Creates a 2 x 2 subplot:
         - Upper left: Deviation metric curve.
         - Upper right: Deviation metric histogram.
@@ -1451,6 +1458,7 @@ def plot_wavs_woa(bvp_cont: BVP_Container, ch: str) -> None:
         "remove_artifact_waveforms". To create this storage a blood volume pulse
         time series created by the function "extract_bvp" is necessary.
         ch: string that specifies the channel which sould be plotted.
+        container_name: name of BVP Container.
 
     Example:
         plot_wavs_woa(bvp_cont, "S1D15")
@@ -1460,7 +1468,6 @@ def plot_wavs_woa(bvp_cont: BVP_Container, ch: str) -> None:
     subplot_0_1 = subplot_0_0
     subplot_1_0 = bvp_cont.wav_storage_user[ch]['nparray_wav_xy_normal_all_woa']
     subplot_1_1 = bvp_cont.wav_storage_user[ch]['nparray_wav_xy_normal_zscore_all_woa']  # noqa: E501
-
 
     fig, axes = plt.subplots(2, 2, figsize=(11,8))
     plt.rcParams.update({'font.size': 10})
@@ -1516,7 +1523,11 @@ def plot_wavs_woa(bvp_cont: BVP_Container, ch: str) -> None:
     ax.axhline(1, color='k', linestyle='--', linewidth=0.5)
     ax.axhline(0, color='k', linestyle='--', linewidth=0.5)
 
-    plt.tight_layout()
+    if not container_name == '':
+        fig.tight_layout(rect=[0, 0, 1, 0.97])
+        fig.suptitle(container_name, fontsize=12, fontweight='bold')
+    else:
+        plt.tight_layout()
     plt.show()
 
 def plot_wavs_classes(bvp_cont: BVP_Container,
