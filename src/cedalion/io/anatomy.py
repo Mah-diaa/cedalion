@@ -153,7 +153,6 @@ def cell_coordinates(mask, affine, units="mm"):
     return transformed
 
 
-
 def read_parcellations(parcel_file: str | Path) -> pd.DataFrame:
     """Read parcellation labels from a json file.
 

@@ -73,11 +73,11 @@ def validate_schemas(func):
     return wrapper
 
 
-# schemas describe the minimum requirements. LabeledPointClouds have an additional
+# schemas describe the minimum requirements. LabeledPoints have an additional
 # dimension that's name denote the coordinate system and that is not enforced yet.
 # FIXME support wildcards in dims?
 
-LabeledPointCloudSchema = DataArraySchema(
+LabeledPointsSchema = DataArraySchema(
     dims=("label",), coords=(("label", ("label", "type")),)
 )
 
