@@ -1,18 +1,4 @@
-"""Solve the GLM model.
-
-Modifications for Image Space (Parcel/Vertex) Compatibility
------------------------------------------------------------
-
-This script extends Cedalion functions originally designed for channel space,
-allowing them to also support image space data such as parcel-level or vertex-level time series.
-
-Key changes include:
-- Added flexible handling of spatial dimensions using:
-    spatial_dim = xrutils.other_dim(ts, "time", "chromo")
-  This enables the code to automatically detect and operate over 'parcel', 'vertex', or 'channel' dimensions.
-- Replaced hardcoded references to 'channel' with dynamic spatial dimension references (e.g., [spatial_dim].values),
-  ensuring compatibility with parcel-level and vertex-level data."""
-
+"""Solve the GLM model."""
 
 from __future__ import annotations
 from collections import defaultdict
@@ -21,10 +7,10 @@ import numpy as np
 import xarray as xr
 
 import cedalion.typing as cdt
+import cedalion.dataclasses as cdc
 import cedalion.xrutils as xrutils
-#import cedalion.dataclasses.statistics
 from cedalion.models.glm.design_matrix import DesignMatrix
-#import statsmodels.regression
+
 import statsmodels.api
 import pandas as pd
 from scipy.linalg import toeplitz
@@ -105,7 +91,7 @@ def fit(
     # shoud the design matrix be dimensionless? -> thetas will have units
     ts = ts.pint.dequantify()
 
-    spatial_dim = xrutils.other_dim(ts, "time","chromo")
+    spatial_dim = cdc.get_spatial_dimension(ts)
 
     dim3_name = xrutils.other_dim(design_matrix.common, "time", "regressor")
 
@@ -194,8 +180,8 @@ def predict(
     """
 
     dim3_name = xrutils.other_dim(design_matrix.common, "time", "regressor")
-    
-    spatial_dim = xrutils.other_dim(ts, "time","chromo")
+
+    spatial_dim = cdc.get_spatial_dimension(ts)
 
     prediction = defaultdict(list)
 

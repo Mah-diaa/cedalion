@@ -1,30 +1,5 @@
-"""Functions to create the design matrix for the GLM.
-Modifications for Image Space (Parcel/Vertex) Compatibility
------------------------------------------------------------
+"""Functions to create the design matrix for the GLM."""
 
-This script extends Cedalion functions originally designed for channel space,
-allowing them to also support image space data such as parcel-level or vertex-level time series.
-
-Key changes include:
-- Added flexible handling of spatial dimensions using:
-    spatial_dim = xrutils.other_dim(ts, "time", "chromo")
-  This enables the code to automatically detect and operate over "parcel", "vertex", or "channel" dimensions.
-- Replaced hardcoded references to "channel" with dynamic spatial dimension references (e.g., [spatial_dim].values),
-  ensuring compatibility with parcel-level and vertex-level data.
-- Added a check for "samples" coordinate in the input time series.
-  If missing, it assigns a default sample index via:
-      ts = ts.assign_coords(samples=("time", np.arange(ts.sizes["time"])))
-  This ensures compatibility with downstream functions that expect a "samples" coordinate,
-  particularly during design matrix construction and plotting routines.
-  Additionally, the "time" coordinate is explicitly labeled with units ("s") for clarity.
-- Added assertions in all short-channel regressor functions 
-  ("closest_short_channel_regressor", "max_corr_short_channel_regressor", 
-  and "average_short_channel_regressor") to ensure they are only used in channel space.
-- Added a new helper function "global_mean_regressor" that creates a global signal regressor 
-  by averaging over the spatial dimension (works for channel, parcel, or vertex space).
-- (Suggested improvement) In __repr__, add a check for "self.common is not None" 
-  to make the representation robust when only channel-wise regressors are present.
-"""
 
 from __future__ import annotations
 
@@ -40,6 +15,7 @@ from numpy.polynomial.legendre import legval
 import cedalion.typing as cdt
 import cedalion.xrutils as xrutils
 from cedalion.sigproc.frequency import sampling_rate
+import cedalion.dataclasses as cdc
 
 from .basis_functions import TemporalBasisFunction
 
@@ -108,8 +84,9 @@ class DesignMatrix:
             A tuple containing:
                 - dim3 (str): The third dimension name.
                 - group_y (cdt.NDTimeSeries): The grouped time series.
-                - "unit_values" (np.ndarray): Values of the spatial dimension 
-                  (e.g., "channel", "parcel", or "vertex") that belong to the current computational group.
+                - "unit_values" (np.ndarray): Values of the spatial dimension
+                  (e.g., "channel", "parcel", or "vertex") that belong to the current
+                  computational group.
                 - group_design_matrix (xr.DataArray): The grouped design matrix.
         """
 
@@ -117,7 +94,7 @@ class DesignMatrix:
 
         dim3_name = xrutils.other_dim(self.common, "time", "regressor")
 
-        spatial_dim = xrutils.other_dim(ts, "time", "chromo")
+        spatial_dim = cdc.get_spatial_dimension(ts)
 
         for cwreg in self.channel_wise:
             assert cwreg.sizes["regressor"] == 1
@@ -165,7 +142,7 @@ class DesignMatrix:
                     for reg in channel_wise_regressors:
                         regs.append(
                             reg.sel({spatial_dim: unit_values, dim3_name: dim3})
-                            .isel(spatial_dim=0)  # regs are identical within a group
+                            .isel({spatial_dim : 0})  #regs are identical within a group
                             .pint.dequantify()
                         )
 
@@ -185,13 +162,15 @@ def _hash_channel_wise_regressor(regressor: xr.DataArray) -> list[int]:
     Returns:
         A list of hash values, one for each element of the spatial dimension.
     """
-    
-    spatial_dim = xrutils.other_dim(regressor, "time", "chromo")
+
+    spatial_dim = cdc.get_spatial_dimension(regressor)
 
     tmp = regressor.pint.dequantify()
     n_channel = regressor.sizes[spatial_dim]
-    
-    return [hash(tmp.isel({spatial_dim: i}).values.data.tobytes()) for i in range(n_channel)]
+
+    return [
+        hash(tmp.isel({spatial_dim: i}).values.data.tobytes()) for i in range(n_channel)
+    ]
 
 
 def hrf_regressors(
@@ -216,11 +195,11 @@ def hrf_regressors(
     if "samples" not in ts.coords:
         ts = ts.assign_coords(samples=("time", np.arange(ts.sizes["time"])))
         ts.time.attrs["units"] = "s"
-        
+
     basis = basis_function(ts)
 
     components = basis.component.values
-    spatial_dim = xrutils.other_dim(ts, "time", "chromo")
+    spatial_dim = cdc.get_spatial_dimension(ts)
 
     # could be "chromo" or "wavelength"
     other_dim = xrutils.other_dim(ts, spatial_dim, "time")
@@ -306,7 +285,7 @@ def drift_regressors(ts: cdt.NDTimeSeries, drift_order) -> DesignMatrix:
     Returns:
         xr.DataArray: A DataArray containing the drift regressors.
     """
-    spatial_dim = xrutils.other_dim(ts, "time", "chromo") 
+    spatial_dim = cdc.get_spatial_dimension(ts)
     dim3 = xrutils.other_dim(ts, spatial_dim, "time")
     ndim3 = ts.sizes[dim3]
 
@@ -344,7 +323,7 @@ def drift_legendre_regressors(ts : cdt.NDTimeSeries, order : int) -> DesignMatri
         xr.DataArray: A DataArray containing the drift regressors.
     """
 
-    spatial_dim = xrutils.other_dim(ts, "time", "chromo") 
+    spatial_dim = cdc.get_spatial_dimension(ts)
     dim3 = xrutils.other_dim(ts, spatial_dim, "time")
     ndim3 = ts.sizes[dim3]
 
@@ -383,7 +362,7 @@ def drift_cosine_regressors(ts: cdt.NDTimeSeries, fmax: cdt.QFrequency) -> Desig
     Returns:
         xr.DataArray: A DataArray containing the drift regressors.
     """
-    spatial_dim = xrutils.other_dim(ts, "time", "chromo") 
+    spatial_dim = cdc.get_spatial_dimension(ts)
     dim3 = xrutils.other_dim(ts, spatial_dim, "time")
     ndim3 = ts.sizes[dim3]
 
@@ -468,8 +447,8 @@ def _regressors_from_selected_short_channels(
     selected_short_ch_indices: np.ndarray,
 ) -> xr.DataArray:
     """Build channel-wise short-channel regressors from a selection."""
-    
-    spatial_dim = xrutils.other_dim(ts_long, "time", "chromo")
+
+    spatial_dim = cdc.get_spatial_dimension(ts_long)
     assert spatial_dim == "channel", (
         f"Short-channel regressors only make sense in channel space, "
         f"but got '{spatial_dim}'."
@@ -519,7 +498,7 @@ def closest_short_channel_regressor(
     Returns:
         regressors (xr.DataArray): Channel-wise regressor
     """
-    spatial_dim = xrutils.other_dim(ts_long, "time", "chromo")
+    spatial_dim = cdc.get_spatial_dimension(ts_long)
     assert spatial_dim == "channel", (
         f"Short-channel regressors only make sense in channel space, "
         f"but got '{spatial_dim}'."
@@ -561,7 +540,7 @@ def max_corr_short_channel_regressor(
     Returns:
         xr.DataArray: channel-wise regressors
     """
-    spatial_dim = xrutils.other_dim(ts_long, "time", "chromo")
+    spatial_dim = cdc.get_spatial_dimension(ts_long)
     assert spatial_dim == "channel", (
         f"Short-channel regressors only make sense in channel space, "
         f"but got '{spatial_dim}'."
@@ -604,7 +583,7 @@ def average_short_channel_regressor(ts_short: cdt.NDTimeSeries):
     Returns:
         xr.DataArray: regressors
     """
-    spatial_dim = xrutils.other_dim(ts_short, "time", "chromo")
+    spatial_dim = cdc.get_spatial_dimension(ts_short)
     assert spatial_dim == "channel", (
         f"Average short-channel regressor only makes sense in channel space, "
         f"but got '{spatial_dim}'."
@@ -625,7 +604,7 @@ def global_mean_regressor(ts: cdt.NDTimeSeries) -> DesignMatrix:
         DesignMatrix: design matrix with one global regressor
     """
     # detect the spatial dimension dynamically (channel, parcel, or vertex)
-    spatial_dim = xrutils.other_dim(ts, "time", "chromo")
+    spatial_dim = cdc.get_spatial_dimension(ts)
 
     # mean over spatial dimension → global signal
     regressor = ts.mean(spatial_dim, skipna=True).expand_dims("regressor")

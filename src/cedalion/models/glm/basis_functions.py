@@ -1,16 +1,4 @@
-"""Temporal basis functions for the GLM.
-Modifications for Image Space (Parcel/Vertex) Compatibility
------------------------------------------------------------
-
-This script extends Cedalion functions originally designed for channel space,
-allowing them to also support image space data such as parcel-level or vertex-level time series.
-
-Key changes include:
-- Added flexible handling of spatial dimensions using:
-    spatial_dim = xrutils.other_dim(ts, "time", "chromo")
-  This enables the code to automatically detect and operate over 'parcel', 'vertex', or 'channel' dimensions.
-- Replaced hardcoded references to 'channel' with dynamic spatial dimension references (e.g., [spatial_dim].values),
-  ensuring compatibility with parcel-level and vertex-level data."""
+"""Temporal basis functions for the GLM."""
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
@@ -20,6 +8,7 @@ import pint
 import xarray as xr
 
 import cedalion.typing as cdt
+import cedalion.dataclasses as cdc
 from cedalion import Quantity, units
 from cedalion.sigproc.frequency import sampling_rate
 import cedalion.xrutils as xrutils
@@ -235,8 +224,10 @@ class Gamma(TemporalBasisFunction):
         self,
         ts: cdt.NDTimeSeries,
     ) -> xr.DataArray:
-        spatial_dim = xrutils.other_dim(ts, "time", "chromo")
+
+        spatial_dim = cdc.get_spatial_dimension(ts)
         other_dim = xrutils.other_dim(ts, "time", spatial_dim)
+
         other_dim_values = ts[other_dim].values
 
         tau = _to_dict(self.tau, other_dim_values)
@@ -303,7 +294,7 @@ class GammaDeriv(TemporalBasisFunction):
         self,
         ts: cdt.NDTimeSeries,
     ) -> xr.DataArray:
-        spatial_dim = xrutils.other_dim(ts, "time", "chromo")
+        spatial_dim = cdc.get_spatial_dimension(ts)
         other_dim = xrutils.other_dim(ts, "time", spatial_dim)
         other_dim_values = ts[other_dim].values
 
@@ -375,8 +366,8 @@ class AFNIGamma(TemporalBasisFunction):
         self,
         ts: cdt.NDTimeSeries,
     ) -> xr.DataArray:
-        
-        spatial_dim = xrutils.other_dim(ts, "time", "chromo")
+
+        spatial_dim = cdc.get_spatial_dimension(ts)
         other_dim = xrutils.other_dim(ts, "time", spatial_dim)
         other_dim_values = ts[other_dim].values
 
@@ -430,7 +421,7 @@ class DiracDelta(TemporalBasisFunction):
         self,
         ts: cdt.NDTimeSeries,
     ) -> xr.DataArray:
-        spatial_dim = xrutils.other_dim(ts, "time", "chromo")
+        spatial_dim = cdc.get_spatial_dimension(ts)
         other_dim = xrutils.other_dim(ts, "time", spatial_dim)
         other_dim_values = ts[other_dim].values
 
