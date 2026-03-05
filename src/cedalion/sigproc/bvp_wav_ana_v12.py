@@ -785,7 +785,8 @@ def remove_artifact_waveforms(
         # Compute deviation metric per waveform (absolute deviation)
         bvp_wav_dev = np.zeros(n_bvp_wav)
         for i in range(n_bvp_wav):
-            bvp_wav_dev[i] = np.sum(np.abs(actual_wavs_final[:, i] - bvp_wav_final_mean))  # noqa: E501
+            bvp_wav_dev[i] = np.sum(np.abs(actual_wavs_final[:, i]
+                                           - bvp_wav_final_mean))
 
         # Percentile thresholds
         p_025 = np.percentile(bvp_wav_dev, 2.5)
@@ -1341,7 +1342,7 @@ def plot_concts_bvpts(bvp_cont: BVP_Container, ch: str, container_name: str = ""
             linewidth=1, color=[1, 0, 0], label='[O₂Hb] low—frequency trend')
     ax.set_title('[O₂Hb] ('+source+' | '+detector+', $f_s$ = 50 Hz)',
                   fontweight='bold', fontsize=14)
-    ax.set_xlabel('Time [min]')
+    ax.set_xlabel('Time [s]')
     ax.set_ylabel('[O₂Hb] [µM]')
     ax.autoscale(enable=True, tight=True)
     ax.legend(facecolor="white", framealpha=1)
@@ -1357,10 +1358,11 @@ def plot_concts_bvpts(bvp_cont: BVP_Container, ch: str, container_name: str = ""
             '+', color='k', markersize=8, linewidth=2, label='Maxima')
     ax.set_title('Blood volume pulse (BVP) ('+source+' | '+detector+')',
                   fontweight='bold', fontsize=14)
-    ax.set_xlabel('Time [min]')
+    ax.set_xlabel('Time [s]')
     ax.set_ylabel('BVP [µM]')
     ax.autoscale(enable=True, tight=True)
     ax.legend(facecolor="white", framealpha=1)
+    ax.axhline(0, color='k', linestyle='--', linewidth=0.5)
 
     if not container_name == '':
         fig.tight_layout(rect=[0, 0, 1, 0.965])
