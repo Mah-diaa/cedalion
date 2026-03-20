@@ -46,6 +46,7 @@ from .validator import (
     generate_validation_report,
     ValidationMetrics,
 )
+from .nasion_detector import detect_nasion_auto
 from .ui import (
     FacialRegionEditor,
     AnonymizationPreview,
@@ -213,6 +214,8 @@ def anonymize_scan(
 __all__ = [
     # High-level API
     "anonymize_scan",
+    # Auto nasion detection
+    "detect_nasion_auto",
     # Face detection
     "detect_facial_landmarks",
     "detect_landmarks_from_nasion",

@@ -341,23 +341,16 @@ def get_facial_region_mask(
     cz_relative = cz - origin
     cz_z = np.dot(cz_relative, z_axis)
 
-    # T-shaped facial region mask in head coordinate system:
+    # Rectangular facial region mask in head coordinate system:
     # Anterior mask: only front of head (Y > 0)
     anterior_mask = vertices_y > 0
 
-    # Horizontal bar (eye band): Nz height ± 30mm, full lateral span
-    horiz = anterior_mask & (vertices_z > nz_z - 30) & (vertices_z < nz_z + 30)
-
-    # Vertical bar (nose strip): Nz down 60mm, narrow lateral (±35mm)
-    vert = (
+    # Full rectangle: above Nz to chin/neck, full lateral span (covers ears)
+    facial_mask = (
         anterior_mask
-        & (vertices_z > nz_z - 60)
-        & (vertices_z < nz_z)
-        & (np.abs(vertices_x) < 35)
+        & (vertices_z > nz_z - 120)
+        & (vertices_z < nz_z + 30)
     )
-
-    # Combined T-shape
-    facial_mask = horiz | vert
 
     # Create protection zones using KDTree
     protection_radius_mm = float(protection_radius.to("mm").magnitude)
