@@ -16,7 +16,7 @@ import cedalion.dataclasses as cdc
 import cedalion.typing as cdt
 from cedalion import units
 
-from .validator import ValidationMetrics
+from .validator import ValidationResult
 
 
 logger = logging.getLogger("cedalion")
@@ -196,7 +196,7 @@ class AnonymizationPreview:
         self,
         original: cdc.TrimeshSurface,
         anonymized: cdc.TrimeshSurface,
-        metrics: ValidationMetrics = None,
+        metrics: ValidationResult = None,
     ):
         """Initialize the preview.
 
@@ -264,11 +264,10 @@ class AnonymizationPreview:
 
         # Add metrics if available
         if self.metrics is not None:
-            status = "PASS" if self.metrics.protected_points_preserved else "FAIL"
+            status = "PASS" if self.metrics.passed else "FAIL"
             metrics_text = (
                 f"Validation: {status}\n"
-                f"Max Protected Deviation: {self.metrics.max_protected_deviation:.3f}mm\n"
-                f"Facial Displacement: {self.metrics.facial_displacement_mean:.1f}mm (mean)"
+                f"{self.metrics.summary}"
             )
             plotter.add_text(
                 metrics_text,
@@ -356,7 +355,7 @@ class DisplacementViewer:
 def quick_preview(
     original: cdc.TrimeshSurface,
     anonymized: cdc.TrimeshSurface,
-    metrics: ValidationMetrics = None,
+    metrics: ValidationResult = None,
 ):
     """Quick function to preview anonymization results.
 
