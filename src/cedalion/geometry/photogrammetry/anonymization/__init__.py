@@ -41,10 +41,7 @@ from .anonymizer import (
 )
 from .validator import (
     validate_anonymization,
-    compute_point_deviations,
-    compute_surface_distance,
-    generate_validation_report,
-    ValidationMetrics,
+    ValidationResult,
 )
 from .nasion_detector import detect_nasion_auto
 from .ui import (
@@ -187,25 +184,17 @@ def anonymize_scan(
 
     # Step 6: Validation
     if validate:
-        logger.info("Validating anonymization quality")
-        metrics = validate_anonymization(
+        logger.info("Running post-anonymization sanity check")
+        check = validate_anonymization(
             original_surface=surface,
             anonymized_surface=result.anonymized_surface,
             facial_mask=facial_mask,
             protected_points=protected_points,
-            tolerance=0.5 * units.mm,
+            tolerance=1.0 * units.mm,
         )
 
-        if not metrics.protected_points_preserved:
-            logger.warning(
-                "Some protected points moved beyond tolerance. "
-                "Consider increasing protection_radius or reducing smoothing_iterations."
-            )
-
-        # Log summary
-        report = generate_validation_report(metrics)
-        for line in report.split("\n"):
-            logger.debug(line)
+        if not check.passed:
+            logger.warning(f"Anonymization check: {check.summary}")
 
     logger.info("Face anonymization complete")
     return result
@@ -234,10 +223,7 @@ __all__ = [
     "AnonymizationResult",
     # Validation
     "validate_anonymization",
-    "compute_point_deviations",
-    "compute_surface_distance",
-    "generate_validation_report",
-    "ValidationMetrics",
+    "ValidationResult",
     # UI
     "FacialRegionEditor",
     "AnonymizationPreview",

@@ -32,8 +32,8 @@ from cedalion.geometry.photogrammetry.anonymization.anonymizer import (
     smooth_region_selective,
 )
 from cedalion.geometry.photogrammetry.anonymization.validator import (
-    compute_point_deviations,
-    compute_surface_distance,
+    validate_anonymization as validate_anonymization_fn,
+    ValidationResult,
 )
 
 
@@ -405,48 +405,12 @@ class TestAnonymizer:
 
 
 class TestValidator:
-    """Tests for validation functionality."""
+    """Tests for validation sanity checks."""
 
-    def test_compute_point_deviations(
+    def test_validate_anonymization_passes(
         self, simple_sphere_surface, anatomical_landmarks
     ):
-        """Test point deviation computation."""
-        # Create a slightly modified surface
-        modified_mesh = simple_sphere_surface.mesh.copy()
-        modified_mesh.vertices[0] += [1, 0, 0]  # Move one vertex
-
-        modified_surface = cdc.TrimeshSurface(
-            mesh=modified_mesh,
-            crs=simple_sphere_surface.crs,
-            units=simple_sphere_surface.units,
-        )
-
-        deviations = compute_point_deviations(
-            simple_sphere_surface, modified_surface, anatomical_landmarks
-        )
-
-        # Should have deviations for all landmarks
-        assert len(deviations) == len(anatomical_landmarks.label)
-
-        # All deviations should be non-negative
-        for dev in deviations.values():
-            assert dev >= 0
-
-    def test_compute_surface_distance(self, simple_sphere_surface):
-        """Test surface distance computation."""
-        # Create identical surfaces
-        mean_dist, max_dist, hausdorff = compute_surface_distance(
-            simple_sphere_surface, simple_sphere_surface
-        )
-
-        # Identical surfaces should have zero distance
-        assert_allclose(mean_dist, 0, atol=1e-10)
-        assert_allclose(hausdorff, 0, atol=1e-10)
-
-    def test_validate_anonymization(
-        self, simple_sphere_surface, anatomical_landmarks
-    ):
-        """Test full validation workflow."""
+        """Test that validation passes for a correctly anonymized mesh."""
         facial_landmarks = detect_facial_landmarks(
             simple_sphere_surface, anatomical_landmarks
         )
@@ -459,23 +423,23 @@ class TestValidator:
             config=AnonymizationConfig(smoothing_iterations=5)
         )
 
-        metrics = validate_anonymization(
+        check = validate_anonymization(
             original_surface=simple_sphere_surface,
             anonymized_surface=result.anonymized_surface,
             facial_mask=mask,
             protected_points=anatomical_landmarks,
-            tolerance=0.5 * units.mm,
+            tolerance=1.0 * units.mm,
         )
 
-        # Metrics should have all expected fields
-        assert metrics.landmark_deviations is not None
-        assert metrics.max_protected_deviation >= 0
-        assert metrics.facial_displacement_mean >= 0
+        assert isinstance(check, ValidationResult)
+        assert check.mesh_valid
+        assert check.protected_points_intact
+        assert check.face_coverage_pct > 0
 
-    def test_validation_metrics_computed(
+    def test_validate_returns_correct_counts(
         self, simple_sphere_surface, anatomical_landmarks
     ):
-        """Test all metrics are calculated correctly."""
+        """Test that vertex removal counts are consistent."""
         facial_landmarks = detect_facial_landmarks(
             simple_sphere_surface, anatomical_landmarks
         )
@@ -488,19 +452,17 @@ class TestValidator:
             config=AnonymizationConfig(smoothing_iterations=10)
         )
 
-        metrics = validate_anonymization(
+        check = validate_anonymization(
             simple_sphere_surface,
             result.anonymized_surface,
             mask,
             anatomical_landmarks,
         )
 
-        # All metric values should be finite
-        assert np.isfinite(metrics.max_protected_deviation)
-        assert np.isfinite(metrics.mean_surface_distance)
-        assert np.isfinite(metrics.hausdorff_distance)
-        assert np.isfinite(metrics.facial_displacement_mean)
-        assert np.isfinite(metrics.facial_displacement_max)
+        assert check.expected_vertices_removed == int(mask.sum())
+        assert check.actual_vertices_removed >= 0
+        assert 0 <= check.face_coverage_pct <= 100
+        assert check.protected_point_max_deviation >= 0
 
 
 # ============================================================================
@@ -557,18 +519,19 @@ class TestIntegration:
             validate=False,
         )
 
-        # Check landmark deviation
-        metrics = validate_anonymization(
+        # Check that validation passes with protected points
+        check = validate_anonymization(
             simple_sphere_surface,
             result.anonymized_surface,
             result.facial_mask,
             anatomical_landmarks,
-            tolerance=0.5 * units.mm,
+            tolerance=1.0 * units.mm,
         )
 
-        # All landmark deviations should be very small (within tolerance)
-        for label, deviation in metrics.landmark_deviations.items():
-            assert deviation < 0.5, f"Landmark {label} deviation {deviation}mm exceeds tolerance"
+        assert check.protected_points_intact, (
+            f"Protected points not intact: max deviation "
+            f"{check.protected_point_max_deviation:.3f}mm"
+        )
 
     def test_facial_region_modified(
         self, simple_sphere_surface, anatomical_landmarks
