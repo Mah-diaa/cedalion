@@ -41,9 +41,10 @@ REG_PAPER_MUA_SBF = dict(
     alpha_meas=1e4,
     alpha_spatial=1e-2,
     apply_c_meas=True,
+    lambda_R_conc=1e-6
 )
 """Optimal set of regularization parameters according to an optimization study for a
-ball squeezing dataset. :cite:t:`Carlton2025`.
+ball squeezing dataset. :cite:t:`Carlton2026`.
 """
 
 SBF_GAUSSIANS_DENSE = dict(
@@ -54,7 +55,7 @@ SBF_GAUSSIANS_DENSE = dict(
     sigma_scalp=5 * units.mm,
 )
 """Optimal set of Gaussian SBF parameters according to an optimization study for a
-ball squeezing dataset. :cite:t:`Carlton2025`.
+ball squeezing dataset. :cite:t:`Carlton2026`.
 """
 
 SBF_GAUSSIANS_SPARSE = dict(
@@ -66,19 +67,27 @@ SBF_GAUSSIANS_SPARSE = dict(
 )
 """A sparse set of gaussians SBFs."""
 
-# FIXME
-# likewise, if there are any heuristics how to set these parameters, we could offer
-# functions to compute them
-#def estimate_reg_params(*args) -> dict:
-#    """Estimate regularization parameters from data.
-#
-#    Args:
-#        *args: Variable arguments for parameter estimation.
-#
-#    Returns:
-#        Estimated regularization parameters.
-#    """
-#    pass
+
+def estimate_alpha_meas(C_meas, K=0.01):
+    """Implements a heuristic for choosing alpha_meas.
+
+    The strength of the regularization is determined by the relative scale of the C and
+    R regularization matrices, which is encoded in the ratio:
+
+        K = median(eig( lambda_meas C )) / max(eig( lambda_R A R A'))
+
+    In past analyses K was about 0.01 .. 0.1. With this a heuristic for choosing
+    alpha_meas can be formed:
+
+        alpha_meas = K / median(eig(C_meas))
+
+    Args:
+        C_meas: diagonal values of C_meas matrix
+        K : relative scale of C and R regularization matrices
+    """
+
+    return K / np.median(C_meas)
+
 
 class SpatialBasisFunctions(ABC):
     """Base for SBF implementations."""
@@ -543,9 +552,6 @@ class OriginalGaussianSpatialBasisFunctions:
 class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
     """Gaussian Spatial Basis Functions.
 
-    Note: This implementation differs from the original one by a factor 2pi
-    in the denominator of the gaussians.
-
     Args:
         head_model: a TwoSurfaceHeadModel with brain and scalp surfaces
         Adot : the sensitivity matrix
@@ -576,7 +582,11 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         self.verbose = verbose
 
         self._mask: xr.DataArray = None  # shape (vertex)
+
+        # H integrates Adot, i.e. it describes each kernel's influence on each channel
         self._H: xr.DataArray = None  # shape(channel, kernel, wavelength)
+
+        # G contains the kernel's value for each vertex
         self._G: csr_array = None  # shape (kernel, vertex)
 
         # coordinate arrays of G. Have to keep them separate since G is not a DataArray
@@ -584,6 +594,9 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         self._G_kernel_is_brain: np.ndarray = None
         self._G_vertex_is_brain: np.ndarray = None
         self._G_vertex_parcel: np.ndarray = None
+
+        self.nkernel_brain : int = None
+        self.nvertices_brain : int = None
 
         # compute _G
         self._compute_sensitivity_mask(Adot)
@@ -715,6 +728,10 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         for i_kernel in tqdm(np.arange(n_kernel), disable=not self.verbose):
             dists = np.linalg.norm(mesh_downsampled[[i_kernel],:] - mesh, axis=1)
             kernel_values = norm_pdf(dists)
+
+            # change kernel normalization to match original implementation
+            kernel_values /= (2 * np.pi * sigma**2)
+
             indices : np.ndarray = np.flatnonzero(kernel_values >= 1e-16)
             csr_indices.append( vertex_indices[indices] )
             csr_data.append(kernel_values[indices])
@@ -764,6 +781,9 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         n_kernel = len(brain_downsampled) + len(scalp_downsampled)
         n_vertex = head_model.brain.nvertices + head_model.scalp.nvertices
 
+        self.nkernel_brain = len(brain_downsampled)
+        self.nvertices_brain = head_model.brain.nvertices
+
         G_shape = (n_kernel, n_vertex)
 
         G_brain = self._get_gaussian_kernels_on_mesh(
@@ -786,9 +806,9 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
 
         self._G_kernel = np.arange(n_kernel)
         self._G_kernel_is_brain = np.zeros(n_kernel, dtype=bool)
-        self._G_kernel_is_brain[:len(brain_downsampled)] = True
+        self._G_kernel_is_brain[:self.nkernel_brain] = True
         self._G_vertex_is_brain = np.zeros(n_vertex, dtype=bool)
-        self._G_vertex_is_brain[:head_model.brain.nvertices] = True
+        self._G_vertex_is_brain[:self.nvertices_brain] = True
 
         if "parcel" in head_model.brain.vertex_coords:
             self._G_vertex_parcel = np.hstack(
@@ -917,24 +937,6 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         """
         raise NotImplementedError()
 
-        # FIXME: special handling of sparse G is needed
-
-        #with h5py.File(fname, "w") as fout:
-        #    ioutils.xarray_to_hdfgroup(fout, self.H, "H")
-        #    ioutils.xarray_to_hdfgroup(fout, self.sbf.G_brain, "G_brain")
-        #    ioutils.xarray_to_hdfgroup(fout, self.sbf.G_scalp, "G_scalp")
-        #    ioutils.xarray_to_hdfgroup(fout, self._mask, "_mask")
-#
-        #    for name in [
-        #        "threshold_brain",
-        #        "threshold_scalp",
-        #        "sigma_brain",
-        #        "sigma_scalp",
-        #        "mask_threshold",
-        #    ]:
-        #        fout["/"].attrs[name] = str(getattr(self, name))
-
-
 
     @classmethod
     def from_file(cls, fname : Path | str) -> "GaussianSpatialBasisFunctions":
@@ -948,31 +950,6 @@ class GaussianSpatialBasisFunctions(SpatialBasisFunctions):
         """
 
         raise NotImplementedError()
-
-        #sbf = cls.__new__(cls)
-        #with h5py.File(fname, "r") as f:
-        #    sbf.H = ioutils.xarray_from_hdfgroup(f, "H")
-        #    sbf.G_brain = ioutils.xarray_from_hdfgroup(f, "G_brain")
-        #    sbf.G_scalp = ioutils.xarray_from_hdfgroup(f, "G_scalp")
-        #    sbf._mask = ioutils.xarray_from_hdfgroup(f, "_mask")
-#
-        #    for name in [
-        #        "threshold_brain",
-        #        "threshold_scalp",
-        #        "sigma_brain",
-        #        "sigma_scalp",
-        #    ]:
-        #        setattr(sbf, name, pint.Quantity(f["/"].attrs[name]))
-#
-        #    setattr(sbf, "mask_threshold", float(f["/"].attrs["mask_threshold"]))
-#
-        #return sbf
-
-
-
-
-
-
 
 
 class ImageRecon:
@@ -1000,6 +977,9 @@ class ImageRecon:
             rescaled. A smaller alpha_spatial will more strongly suppress activation
             that is reconstructed on the scalp.
 
+        lambda_R_conc: regularization parameter that sets the expected magnitude of the
+            image covariance.
+
         apply_c_meas: controls whether the provided measurement covariance should be
             used for measurement regularization.
 
@@ -1013,6 +993,7 @@ class ImageRecon:
         *,
         alpha_meas: float = 0.001,
         alpha_spatial: float | None = None,
+        lambda_R_conc: float | None = None,
         apply_c_meas: bool = False,
         recon_mode: ReconMode = "mua",
         brain_only: bool = False,
@@ -1030,6 +1011,7 @@ class ImageRecon:
         self.alpha_meas = alpha_meas
         self.alpha_spatial = alpha_spatial
         self.apply_c_meas = apply_c_meas
+        self.lambda_R_conc = lambda_R_conc
 
         self.sbf = spatial_basis_functions
         self.Adot = Adot # FIXME can we remove this?
@@ -1040,8 +1022,8 @@ class ImageRecon:
         # These would invalidate when Adot or reg./sbf. params. change. Changing
         # these requires a new instance of ImageRecon, so they are considered constants
         # here. Depending on recon_mode they have different shapes.
-        self._D: xr.DataArray = None  # Linv^2 * A.T
-        self._F: xr.DataArray = None  # A_hat * A_hat.T
+        self._D: xr.DataArray = None  # R * A.T
+        self._F: xr.DataArray = None  # A @ R @ A.T
 
         # The matrix to transform from absorption changes to concentrations
         self._mua2conc : xr.DataArray = None
@@ -1136,23 +1118,6 @@ class ImageRecon:
             raise ValueError()  # unreachable
 
 
-    def get_image_noise_tstat(
-        self, time_series: cdt.NDTimeSeries, c_meas: xr.DataArray | None = None
-    ):
-        """Compute t-statistic images from noise estimates.
-
-        Args:
-            time_series: Time series data for statistics computation.
-            c_meas: Measurement covariance matrix (optional).
-
-        Returns:
-            xr.DataArray: T-statistic images.
-        """
-        # FIXME is this not already images ? so just X_image / X_noise?
-        # not sure what time_series and C_meas would be here
-        pass
-
-
     # --- PREPARATION METHODS ---
 
     def _update_and_hash_cmeas(self, c_meas):
@@ -1186,10 +1151,9 @@ class ImageRecon:
 
     def _prepare(self, Adot):
         """Precompute everything that depends only on inputs in the constructor."""
-        # FIXME remove:
-        if self.alpha_spatial is None:
-            if self.brain_only:
-                Adot = self.Adot.sel(vertex=self.Adot.is_brain.values)
+
+        if self.brain_only:
+            Adot = self.Adot.sel(vertex=self.Adot.is_brain.values)
 
         # calculate D and F for the selected choice of recon_mode and sbf.
         if self.recon_mode == "conc":
@@ -1204,7 +1168,8 @@ class ImageRecon:
             raise ValueError()  # unreachable
 
         if self.recon_mode == "mua2conc":
-            # calculate _mua2conc # FIXME not sure what this is ?
+            # calculate _mua2conc, which transforms absorption to concentration
+            # changes
             E = nirs.get_extinction_coefficients("prahl", Adot.wavelength)
             self._mua2conc = xrutils.pinv(E)
 
@@ -1262,7 +1227,6 @@ class ImageRecon:
         else:
             D = self._D
 
-
         if self.recon_mode == "conc":
             return self._calculate_W_conc(D, C_meas)
         if self.recon_mode in ["mua", "mua2conc"]:
@@ -1270,7 +1234,41 @@ class ImageRecon:
 
 
     # --- MATRIX COMPUTATION METHODS ---
-    def _calculate_DF(self, A):
+    def _calculate_prior_R(self, A: xr.DataArray):
+        """Compute spatial regularization prior (column scaling matrix).
+
+        Calculates diagonal regularization matrix based on forward model sensitivity:
+        R_j = 1 / (sum_i A_ij^2 + λ_spatial) where λ_spatial is scaled by max
+        sensitivity. Vertices with high sensitivity get less regularization; low
+        sensitivity vertices are smoothed more heavily.
+
+        Parameters:
+        A : numpy.ndarray or xr.DataArray
+            Forward model matrix with shape (n_channels, n_vertices) or similar.
+        alpha_spatial : float
+            Spatial regularization weight controlling smoothness strength.
+
+        Returns:
+        R : numpy.ndarray or xr.DataArray
+            Diagonal regularization matrix (as 1D array of diagonal elements)
+            with same shape as columns of A.
+        """
+
+        B = np.sum((A**2), axis=0)
+        b = B.max()
+
+        if self.alpha_spatial is None:
+            lambda_spatial = 1.
+        else:
+            lambda_spatial = self.alpha_spatial * b
+
+        L = np.sqrt(B + lambda_spatial)
+        Linv = 1 / L
+        R = Linv**2
+
+        return R
+
+    def _calculate_DF(self, A: xr.DataArray):
         """Calculate intermediate D and F matrices for regularization.
 
         Args:
@@ -1288,22 +1286,14 @@ class ImageRecon:
             F_xr = xr.DataArray(F, dims=(f"{dim}_1", f"{dim}_2"))
             D_xr = None
         else:
-            B = np.sum((A**2), axis=0)
-            b = B.max()
-
-            # GET A_HAT
-            lambda_spatial = self.alpha_spatial * b
-
-            L = np.sqrt(B + lambda_spatial)
-            Linv = 1/L.values
-            # Linv = np.diag(Linv)
-
-            A_hat = A * Linv
-            dim = A_hat.dims[0]
+            #% GET spatial prior R
+            R = self._calculate_prior_R(A)
+            AR = A * R
+            dim = AR.dims[0]
 
             #% GET F and D
-            F = A_hat.values @ A_hat.values.T
-            D = Linv[:, np.newaxis]**2 * A.values.T
+            F = AR.values @ A.values.T
+            D = R.values[:, np.newaxis] * A.values.T
 
             if self.sbf:
                 if self.recon_mode in ["mua", "mua2conc"]:
@@ -1324,7 +1314,6 @@ class ImageRecon:
             #D_xr = xr.DataArray(D, dims=("flat_vertex", "flat_channel"))
             D_xr = xr.DataArray(D, dims=(vertex_dim, channel_dim))
             D_xr = D_xr.assign_coords(xrutils.coords_from_other(A,dims=D_xr.dims))
-
             F_xr = xr.DataArray(F, dims=(f"{dim}_1", f"{dim}_2"))
 
         return D_xr, F_xr
@@ -1373,27 +1362,30 @@ class ImageRecon:
         return D, F
 
 
-    def _calculate_W(self, A, F, c_meas=None):
+    def _calculate_W(self, A, F, lambda_R, c_meas=None):
         """Calculate pseudoinverse W from sensitivity and regularization.
 
         Args:
             A: Sensitivity matrix.
             F: Regularization matrix F.
             c_meas: Measurement covariance matrix (optional).
+            lambda_R: sets the expected magnitude of the image covariance
 
         Returns:
             xr.DataArray: pseudoinverse W.
         """
 
-        max_eig = np.max(np.linalg.eigvalsh(F)) # F~=AA^T is real and symmetric
-        lambda_meas = self.alpha_meas * max_eig
+        # FIXME: lambda_R cancels out in the calculation of W. It could be removed here.
+        if lambda_R is None:
+            lambda_R = 1.
+
+        lambda_meas = lambda_R * self.alpha_meas * np.max(np.linalg.eigh(F)[0])
 
         # A is 2D. Either (vertex x channel) or (kernel x channel)
-
         if c_meas is not None:
-            W = A.values @ np.linalg.inv(F.values + lambda_meas * c_meas)
+            W = lambda_R * A.values @ np.linalg.inv(lambda_R * F.values + lambda_meas * c_meas) # noqa:E501
         else:
-            W = A.values @ np.linalg.inv(F.values + lambda_meas * np.eye(A.shape[1]))
+            W = lambda_R * A.values @ np.linalg.inv(lambda_R * F.values + lambda_meas * np.eye(A.shape[1])) # noqa:E501
 
         vertex_dim = A.dims[0] # flat_vertex, flat_kernel, kernel
         channel_dim = A.dims[1] # flat_channel, channel
@@ -1421,7 +1413,7 @@ class ImageRecon:
             c_meas = fwm.stack_flat_channel(c_meas)
             c_meas = np.diag(c_meas)
 
-        return self._calculate_W(A, self._F, c_meas)
+        return self._calculate_W(A, self._F, self.lambda_R_conc, c_meas)
 
 
     def _calculate_W_mua(self, A, c_meas=None):
@@ -1436,6 +1428,7 @@ class ImageRecon:
                 dimension.
         """
         W = []
+        lambda_R_indirect = self.compute_lambda_R_indirect()
         for wavelength in A.wavelength:
             if c_meas is not None:
                 c_meas_w = c_meas.sel(wavelength=wavelength)
@@ -1446,6 +1439,7 @@ class ImageRecon:
             W_xr = self._calculate_W(
                 A.sel(wavelength=wavelength),
                 self._F.sel(wavelength=wavelength),
+                lambda_R_indirect.sel(wavelength=wavelength).values,
                 c_meas_w,
             )
             W.append(W_xr)
@@ -1456,7 +1450,6 @@ class ImageRecon:
         return W_xr
 
     # --- IMAGE RECONSTRUCTION METHODS ---
-
     def _get_image_conc(self, y: cdt.NDTimeSeries) -> cdt.NDTimeSeries:
         y = fwm.stack_flat_channel(y)
         y = y.reset_index("flat_channel")
@@ -1468,7 +1461,7 @@ class ImageRecon:
                 i for i in self._W.flat_channel.values if i in y.flat_channel.values
             ]
             y = y.sel(flat_channel = sel_channels)
-            W = self._W.sel(flat_channel=sel_channels)
+            W = self._W.sel(flat_channel = sel_channels)
         except KeyError:
             raise ValueError(
                 "This time series contains channel(s) which is/are not in the "
@@ -1476,7 +1469,6 @@ class ImageRecon:
             )
 
         conc_img = xrutils.contract(W, y, "flat_channel")
-
 
         if self.sbf is None:
             conc_img = fwm.unstack_flat_vertex(conc_img)
@@ -1497,10 +1489,8 @@ class ImageRecon:
             xr.DataArray: Absorption coefficient image.
         """
 
-        #time_dim = self._get_time_dimension(y)
-
-        # make sure that ordering of channels is consistent
-        # y may contain less channels then W due to pruning
+        # make sure that ordering of channels is consistent y may contain less channels
+        # then W due to pruning.
         try:
             sel_channels = [i for i in self._W.channel.values if i in y.channel.values]
             y = y.sel(channel=sel_channels)
@@ -1605,11 +1595,123 @@ class ImageRecon:
         # Create properly formatted xarray
         #return self._create_mua_dataarray(noise_var, c_meas, time_dim)
 
+    def get_image_noise_posterior(self, c_meas : xr.DataArray | None = None):
+        """Compute posterior variance of reconstructed images.
+
+        Calculates the diagonal of the posterior covariance matrix:
+        Cov(X|y) = R - R * A^T @ (F + λ*C)^(-1) @ A * R
+        where R is the spatial prior. Returns only the diagonal (variance at each
+        vertex).
+
+        Parameters:
+            c_meas : Measurement covariance matrix.
+
+        Returns:
+            xr.DataArray: Posterior variance of reconstructed images.
+        """
+
+        c_meas, new_W_input_hash = self._update_and_hash_cmeas(c_meas)
+
+        # (re-)calculate W when C_meas is new
+        if (self._W_input_hash is None) or (new_W_input_hash != self._W_input_hash):
+            self._W_input_hash = new_W_input_hash
+            self._W = self._get_W(c_meas)
+
+        if self.recon_mode == "conc":
+            conc_img = self._get_posterior_cov_conc()
+            return conc_img
+
+        elif self.recon_mode in ["mua", "mua2conc"]:
+            mua_img = self._get_posterior_cov_mua()
+            if self.recon_mode == "mua":
+                return mua_img
+            else:
+                return xrutils.contract(
+                    self._mua2conc**2, mua_img / units.mm**2, "wavelength"
+                )
+        else:
+            raise ValueError()  # unreachable
+
+    def _get_posterior_cov_conc(self):
+        if self.sbf is not None:
+            A = self.sbf.H
+            Adot_stacked = fwm.ForwardModel.compute_stacked_sensitivity(A)
+        else:
+            A = self.Adot
+            Adot_stacked = fwm.ForwardModel.compute_stacked_sensitivity(A)
+
+        W = self._W
+        R = self._calculate_prior_R(Adot_stacked)
+        R = self.lambda_R_conc * R
+
+        # ---------------------------------------------------------
+        # Posterior variance (diagonal only)
+        # mse_post(j) = R_j * (1 - (W A^T)_{jj})
+        # ---------------------------------------------------------
+        s = np.sum(W * Adot_stacked.T, axis=1)  # elementwise multiply row i with col. i
+        mse_post = R * (1.0 - s)
+
+        if self.sbf is not None:
+            mse_post = self.sbf.kernel_to_image_space_conc(mse_post).T
+        else:
+            mse_post = fwm.unstack_flat_vertex(mse_post)
+
+        # FIXME should probably not assume units here
+        mse_post = mse_post.pint.quantify("molar**2")
+
+        return mse_post
+
+    def _get_posterior_cov_mua(self):
+        """Compute W and mse_posterior for a given wavelength.
+
+        It use spatial regularization (via column scaling) and measurement
+        regularization in data space.
+        """
+        if self.sbf is not None:
+            A = self.sbf.H
+        else:
+            A = self.Adot
+
+        lambda_R_indirect = self.compute_lambda_R_indirect()
+        mse_lst = []
+        W = self._W
+
+        for wl in A.wavelength:
+
+            lambda_R_wl = lambda_R_indirect.sel(wavelength=wl).values
+
+            A_wl = A.sel(wavelength=wl)
+            W_wl = W.sel(wavelength=wl)
+
+            R = self._calculate_prior_R(A_wl)
+            R = lambda_R_wl * R
+
+            # ---------------------------------------------------------
+            # Posterior variance (diagonal only)
+            # mse_post(j) = R_j * (1 - (W A^T)_{jj})
+            # ---------------------------------------------------------
+            s = np.sum(W_wl * A_wl.T, axis=1)  # elementwise multiply row i with col. i
+            mse_post = R * (1.0 - s)
+            mse_lst.append(mse_post)
+
+        mse_post_xr = xr.concat(mse_lst, dim='wavelength')
+
+        if self.sbf is not None:
+            mse_post_xr = self.sbf.kernel_to_image_space_mua(mse_post_xr)
+
+        return mse_post_xr
+
     # --- HELPER METHODS FOR IMAGE COMPUTATION ---
 
     def _get_time_dimension(self, data: xr.DataArray) -> str | None:
         """Detect time dimension in data."""
         for dim in ['time', 'reltime']:
+            if dim in data.dims:
+                return dim
+        return None
+
+    def _get_spatial_dimension(self, data: xr.DataArray) -> str | None:
+        for dim in ['vertex', 'kernel', 'parcel', 'channel']:
             if dim in data.dims:
                 return dim
         return None
@@ -1644,4 +1746,56 @@ class ImageRecon:
         weighted = W_expanded * c_sqrt
         return np.nansum(weighted**2, axis=1)  # (vertex, time)
 
+    def compute_lambda_R_indirect(self):
+        """Compute wavelength-specific prior scaling parameter for indirect recon.
 
+        Scales lambda_R to ensure consistency between direct
+        (chromophore space) and indirect (wavelength space) methods. Uses extinction
+        coefficients to relate chromophore regularization strength to OD regularization.
+
+        Returns:
+            lambda_R_indirect : xr.DataArray
+            Wavelength-specific parameter with dimension (wavelength,).
+            Scaled to match direct method's effective regularization strength.
+
+        """
+
+        # FIXME catch earlier?
+        if self.lambda_R_conc is None:
+            return xr.DataArray(
+                [1.0, 1.0],
+                dims=["wavelength"],
+                coords={"wavelength": self.Adot.wavelength},
+            )
+
+        conc2mua = nirs.get_extinction_coefficients("prahl", self.Adot.wavelength)
+
+        A_stacked = fwm.ForwardModel.compute_stacked_sensitivity(self.Adot)
+        nV_brain = self.Adot.is_brain.sum().values
+        nV_head = self.Adot.shape[1]
+
+        R_direct = self._calculate_prior_R(A_stacked)
+        R_direct = self.lambda_R_conc * R_direct
+
+        R_direct_max = [
+            R_direct[:nV_brain].max().values,
+            R_direct[nV_head : nV_head + nV_brain].max().values,
+        ]
+
+        # Convert direct prior to indirect (OD space)
+        R_indirect_wl1 = self._calculate_prior_R(self.Adot.isel(wavelength=0))
+        R_indirect_wl2 = self._calculate_prior_R(self.Adot.isel(wavelength=1))
+
+        conc2mua = conc2mua.pint.dequantify()  # FIXME: check units
+        R_indirect_converted = conc2mua.values**2 @ R_direct_max  # / units.mm**2
+
+        lambda_wl1 = R_indirect_converted[0] / R_indirect_wl1[:nV_brain].max()
+        lambda_wl2 = R_indirect_converted[1] / R_indirect_wl2[:nV_brain].max()
+
+        lambda_R_indirect = xr.DataArray(
+            [lambda_wl1, lambda_wl2],
+            dims=["wavelength"],
+            coords={"wavelength": self.Adot.wavelength},
+        )
+
+        return lambda_R_indirect
