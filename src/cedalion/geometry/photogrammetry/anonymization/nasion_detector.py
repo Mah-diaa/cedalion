@@ -72,30 +72,37 @@ def detect_nasion_auto(
         Tuple of (nasion_position, metadata) or None if detection fails.
         nasion_position is a numpy array of shape (3,) in mm.
         metadata is a dict with keys: method, confidence, nose_tip,
-        forward_direction, face_contour_3d.
+        forward_direction, face_contour_3d, eyes. ``eyes`` is a tuple
+        (r_eye_3d, l_eye_3d) -- eye-corner midpoints from the same
+        validated view as the nasion, or None on profile-fallback paths.
     """
     vertices = surface.mesh.vertices
 
-    # --- Step 1: Merge seam vertices to eliminate crack noise ---
-    merged_verts = _merge_close_vertices(vertices)
+    # --- Step 1: Isolate head (remove chair/body) ---
+    head_verts, _ = _isolate_head_vertices(vertices)
 
-    # --- Step 2: Isolate head (remove chair/body) ---
-    head_verts, _ = _isolate_head_vertices(merged_verts)
-
-    # --- Step 3: YZ centroid of upper head (needed for profile analysis) ---
+    # --- Step 2: YZ centroid of upper head (needed for profile analysis) ---
     x_min = head_verts[:, 0].min()
     x_max = head_verts[:, 0].max()
     upper = head_verts[head_verts[:, 0] > x_min + 0.6 * (x_max - x_min)]
     yz_centroid = np.array([0.0, upper[:, 1].mean(), upper[:, 2].mean()])
 
-    # --- Step 4: Try MediaPipe face detection ---
+    # --- Step 3: Try MediaPipe face detection ---
     ml_result = _find_nose_tip_mediapipe(surface.mesh, head_verts)
 
     if ml_result is None:
         logger.info("Automatic nasion detection failed — no face found")
         return None
 
-    nose_tip_ml, forward_dir, nasion_proxy, frontal_reliable, face_contour = ml_result
+    (
+        nose_tip_ml,
+        forward_dir,
+        nasion_proxy,
+        frontal_reliable,
+        face_contour,
+        r_eye_3d,
+        l_eye_3d,
+    ) = ml_result
     logger.debug(
         f"MediaPipe face found, "
         f"fwd_angle={np.degrees(np.arctan2(forward_dir[2], forward_dir[1])):.0f}deg, "
@@ -103,19 +110,23 @@ def detect_nasion_auto(
         f"face_contour={'yes' if face_contour is not None else 'no'}"
     )
 
-    # --- Primary: use frontal re-render nasion directly ---
+    # --- Primary: use validated bundle nasion directly ---
     if frontal_reliable:
         nasion = _snap_to_original(nasion_proxy, vertices)
-        logger.debug(f"Auto nasion (frontal): {nasion}")
+        logger.debug(f"Auto nasion (unified): {nasion}")
         return nasion, {
-            "method": "mediapipe+frontal",
+            "method": "mediapipe+unified",
             "confidence": 0.90,
             "nose_tip": nose_tip_ml.copy(),
             "forward_direction": forward_dir.copy(),
             "face_contour_3d": face_contour,
+            "eyes": (r_eye_3d.copy(), l_eye_3d.copy()),
         }
 
     # --- Fallback: geometric profile analysis ---
+    # The unified sweep only returns frontal_reliable=True, so this branch
+    # is effectively dead code. Kept in case a future sweep variant returns
+    # an unvalidated bundle.
     result = _try_direction(
         head_verts, vertices, forward_dir, yz_centroid,
     )
@@ -135,6 +146,7 @@ def detect_nasion_auto(
             "nose_tip": result["nose_tip"],
             "forward_direction": result["forward_direction"],
             "face_contour_3d": face_contour,
+            "eyes": (r_eye_3d.copy(), l_eye_3d.copy()),
         }
 
     logger.info("Profile analysis failed after MediaPipe detection")
@@ -149,16 +161,21 @@ def _find_nose_tip_mediapipe(
     mesh_trimesh,
     head_verts: np.ndarray,
     cam_distance: float = 400.0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, bool] | None:
-    """Detect face direction and nasion using two-pass MediaPipe rendering.
+) -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, bool, np.ndarray | None,
+    np.ndarray, np.ndarray
+] | None:
+    """Unified MediaPipe sweep: nasion, nose tip, eye corners, face oval
+    all extracted from the single best view.
 
-    Pass 1: Renders the mesh from 12 viewpoints to find the forward
-    direction (which way the face points).
-
-    Pass 2: Re-renders from directly in front and back-projects
-    MediaPipe landmark 168 (nasion) from this frontal view. From a
-    frontal camera, the nasion pixel maps correctly to the bridge of
-    the nose rather than the side.
+    Renders the mesh from up to 72 viewpoints (24 azimuth x 3 pitch). For
+    each view where MediaPipe detects a face, back-projects nasion (lm 168),
+    nose tip (lm 1), both eye-corner pairs (33/133 + 263/362), and the face
+    oval (36 contour indices) using the same vtkCellPicker. Jointly validates
+    the bundle (all points on-mesh, X ordering nasion>nose, eyes roughly at
+    nasion height), ranks surviving views by |yaw|, returns the bundle from
+    the view with smallest |yaw|. Early-exits when a view with |yaw|<5 deg
+    validates.
 
     Args:
         mesh_trimesh: trimesh.Trimesh mesh object (with texture).
@@ -166,9 +183,11 @@ def _find_nose_tip_mediapipe(
         cam_distance: Camera distance from head centroid in mm.
 
     Returns:
-        Tuple of (nose_tip_3d, forward_direction, nasion_3d,
-        frontal_reliable, face_contour) or None if no face detected.
-        frontal_reliable is True when the frontal re-render succeeded.
+        Tuple (nose_tip_3d, forward_direction, nasion_3d, frontal_reliable,
+        face_contour, r_eye_3d, l_eye_3d) or None if no view validates.
+        frontal_reliable is True when the bundle came from joint validation
+        (i.e. the new code path). r_eye_3d / l_eye_3d are the eye-corner
+        midpoints (outer+inner)/2 for each eye.
     """
     try:
         import pyvista as pv
@@ -183,6 +202,8 @@ def _find_nose_tip_mediapipe(
         return None
 
     head_centroid = head_verts.mean(axis=0)
+    x_min_h = head_verts[:, 0].min()
+    x_max_h = head_verts[:, 0].max()
 
     # Build pyvista mesh with texture colors
     faces_pv = np.column_stack([
@@ -214,220 +235,201 @@ def _find_nose_tip_mediapipe(
         output_facial_transformation_matrixes=True,
     )
 
+    # MediaPipe FaceLandmarker indices
+    _NASION = 168
+    _NOSE_TIP = 1
+    _R_OUT, _R_IN = 33, 133
+    _L_OUT, _L_IN = 263, 362
+    _FACE_OVAL_INDICES = [
+        10, 338, 297, 332, 284, 251, 389, 356,
+        454, 323, 361, 288, 397, 365, 379, 378,
+        400, 377, 152, 148, 176, 149, 150, 136,
+        172, 58, 132, 93, 234, 127, 162, 21,
+        54, 103, 67, 109,
+    ]
+
     result = None
     try:
         with mp.tasks.vision.FaceLandmarker.create_from_options(options) as lm:
-            # === Pass 1: Find forward direction ===
-            pass1_fwd = None
-            pass1_nose_3d = None
-            pass1_nz_3d = None
+            # === Unified sweep: all landmarks from the same best view ===
+            # Azimuth sweeps around the X=up axis in the Y-Z plane (step 15deg).
+            # Pitch tilts the camera up/down around the tangent axis, so
+            # subjects whose face is tilted relative to gravity can still be
+            # captured. For each view where MediaPipe detects a face, we
+            # back-project nasion, nose tip, both eye-corner pairs, and the
+            # face oval -- all from the SAME rendering. The bundle is jointly
+            # validated and ranked by |yaw|. Guarantees nasion + eyes come
+            # from the same view, so they can't disagree.
+            bundles: list[dict] = []
+            best_so_far_yaw = 180.0
 
-            for theta_deg in range(0, 360, 30):
+            for theta_deg in range(0, 360, 15):
                 theta = np.radians(theta_deg)
-                cam_offset = np.array([
-                    0,
-                    cam_distance * np.cos(theta),
-                    cam_distance * np.sin(theta),
-                ])
-                cam_pos = head_centroid + cam_offset
+                # Horizontal direction from centroid in Y-Z plane
+                horiz = np.array([0.0, np.cos(theta), np.sin(theta)])
 
-                plotter.camera_position = [
-                    cam_pos.tolist(),
-                    head_centroid.tolist(),
-                    [1, 0, 0],
-                ]
-                plotter.render()
-                img = plotter.screenshot(return_img=True)
-                H, W = img.shape[:2]
+                for pitch_deg in (-20, 0, 20):
+                    pitch = np.radians(pitch_deg)
+                    # Tilt the camera by rotating around the tangent axis
+                    # (horizontal, perpendicular to horiz in Y-Z plane).
+                    cam_dir = (
+                        np.cos(pitch) * horiz
+                        + np.sin(pitch) * np.array([1.0, 0.0, 0.0])
+                    )
+                    cam_pos = head_centroid + cam_distance * cam_dir
 
-                mp_image = mp.Image(
-                    image_format=mp.ImageFormat.SRGB,
-                    data=np.ascontiguousarray(img),
-                )
-                detection = lm.detect(mp_image)
+                    plotter.camera_position = [
+                        cam_pos.tolist(),
+                        head_centroid.tolist(),
+                        [1, 0, 0],
+                    ]
+                    plotter.render()
+                    img = plotter.screenshot(return_img=True)
+                    H, W = img.shape[:2]
 
-                if not detection.face_landmarks:
-                    continue
+                    mp_image = mp.Image(
+                        image_format=mp.ImageFormat.SRGB,
+                        data=np.ascontiguousarray(img),
+                    )
+                    detection = lm.detect(mp_image)
 
-                # Validate yaw
-                if detection.facial_transformation_matrixes:
-                    from scipy.spatial.transform import Rotation
-                    mat = detection.facial_transformation_matrixes[0]
-                    rot = Rotation.from_matrix(np.array(mat)[:3, :3])
-                    yaw = rot.as_euler("yxz", degrees=True)[0]
-                    if abs(yaw) > 75:
+                    if not detection.face_landmarks:
                         continue
 
-                face = detection.face_landmarks[0]
-                nose_lm = face[1]
-                nasion_lm = face[168]
+                    # --- Yaw ranking (skip obviously-profile views) ---
+                    yaw_abs = 180.0
+                    if detection.facial_transformation_matrixes:
+                        from scipy.spatial.transform import Rotation
+                        mat = detection.facial_transformation_matrixes[0]
+                        rot = Rotation.from_matrix(np.array(mat)[:3, :3])
+                        yaw = rot.as_euler("yxz", degrees=True)[0]
+                        yaw_abs = abs(yaw)
+                        if yaw_abs > 60:
+                            continue
 
-                # Back-project nose tip to validate detection
-                picker = vtk.vtkCellPicker()
-                picker.SetTolerance(0.01)
-                picker.Pick(
-                    float(int(nose_lm.x * W)),
-                    float(H - 1 - int(nose_lm.y * H)),
-                    0, plotter.renderer,
-                )
-                nose_3d = np.array(picker.GetPickPosition())
-                if np.allclose(nose_3d, 0):
+                    face = detection.face_landmarks[0]
+
+                    picker = vtk.vtkCellPicker()
+                    picker.SetTolerance(0.01)
+
+                    def _bp(idx: int) -> np.ndarray:
+                        lm_pt = face[idx]
+                        picker.Pick(
+                            float(int(lm_pt.x * W)),
+                            float(H - 1 - int(lm_pt.y * H)),
+                            0, plotter.renderer,
+                        )
+                        return np.array(picker.GetPickPosition())
+
+                    nasion_3d = _bp(_NASION)
+                    nose_3d = _bp(_NOSE_TIP)
+                    r_out = _bp(_R_OUT)
+                    r_in = _bp(_R_IN)
+                    l_out = _bp(_L_OUT)
+                    l_in = _bp(_L_IN)
+
+                    # --- Joint validation: all six key points on-mesh ---
+                    key_pts = [nasion_3d, nose_3d, r_out, r_in, l_out, l_in]
+                    if any(np.allclose(p, 0) for p in key_pts):
+                        continue
+
+                    # X-ordering: nasion above nose tip (X = gravity-up)
+                    if nasion_3d[0] <= nose_3d[0]:
+                        continue
+
+                    # Reject nose on top of head
+                    nose_rel = (nose_3d[0] - x_min_h) / (x_max_h - x_min_h)
+                    if nose_rel > 0.85:
+                        continue
+
+                    r_eye_3d = 0.5 * (r_out + r_in)
+                    l_eye_3d = 0.5 * (l_out + l_in)
+
+                    # Eyes must be above nose tip
+                    if (r_eye_3d[0] <= nose_3d[0]
+                            or l_eye_3d[0] <= nose_3d[0]):
+                        continue
+
+                    # Eye midline should be close to nasion in height (within 30mm)
+                    eye_x_mid = 0.5 * (r_eye_3d[0] + l_eye_3d[0])
+                    if abs(eye_x_mid - nasion_3d[0]) > 30.0:
+                        continue
+
+                    # Eye corners not too close to each other
+                    eye_sep = float(np.linalg.norm(r_eye_3d - l_eye_3d))
+                    if eye_sep < 30.0 or eye_sep > 120.0:
+                        continue
+
+                    # Forward direction: nose tip -> centroid in YZ plane
+                    fwd = nose_3d - head_centroid
+                    fwd[0] = 0.0
+                    fwd_norm = np.linalg.norm(fwd)
+                    if fwd_norm < 1e-6:
+                        continue
+                    fwd = fwd / fwd_norm
+
+                    # --- Face oval from the SAME view ---
+                    contour_pts = []
+                    for idx in _FACE_OVAL_INDICES:
+                        pt = _bp(idx)
+                        if not np.allclose(pt, 0):
+                            contour_pts.append(pt.copy())
+                    if len(contour_pts) >= 20:
+                        raw_contour = np.array(contour_pts)
+                        face_contour = _filter_contour_outliers(raw_contour)
+                        if len(face_contour) < 20:
+                            face_contour = raw_contour
+                    else:
+                        face_contour = None
+
+                    bundles.append({
+                        "yaw_abs": yaw_abs,
+                        "nasion_3d": nasion_3d.copy(),
+                        "nose_3d": nose_3d.copy(),
+                        "r_eye_3d": r_eye_3d.copy(),
+                        "l_eye_3d": l_eye_3d.copy(),
+                        "fwd": fwd.copy(),
+                        "face_contour": face_contour,
+                        "theta_deg": theta_deg,
+                        "pitch_deg": pitch_deg,
+                    })
+
+                    # Early-exit: if we have a near-frontal validated bundle,
+                    # stop sweeping -- further views won't improve on this.
+                    if yaw_abs < 5.0:
+                        logger.debug(
+                            f"Unified sweep: early exit at theta={theta_deg}, "
+                            f"pitch={pitch_deg} (|yaw|={yaw_abs:.1f})"
+                        )
+                        best_so_far_yaw = yaw_abs
+                        break
+
+                    if yaw_abs < best_so_far_yaw:
+                        best_so_far_yaw = yaw_abs
+
+                else:
                     continue
-
-                # Reject nose on top of head
-                x_min_h = head_verts[:, 0].min()
-                x_max_h = head_verts[:, 0].max()
-                nose_rel = (nose_3d[0] - x_min_h) / (x_max_h - x_min_h)
-                if nose_rel > 0.85:
-                    continue
-
-                # Forward direction: nose tip -> centroid in YZ plane
-                fwd = nose_3d - head_centroid
-                fwd[0] = 0.0
-                fwd_norm = np.linalg.norm(fwd)
-                if fwd_norm < 1e-6:
-                    continue
-                fwd = fwd / fwd_norm
-
-                pass1_fwd = fwd.copy()
-                pass1_nose_3d = nose_3d.copy()
-
-                # Also grab nasion proxy from this view
-                picker.Pick(
-                    float(int(nasion_lm.x * W)),
-                    float(H - 1 - int(nasion_lm.y * H)),
-                    0, plotter.renderer,
-                )
-                pass1_nz_3d = np.array(picker.GetPickPosition()).copy()
-
-                logger.debug(f"Pass 1: face found at {theta_deg}deg")
                 break
 
-            if pass1_fwd is None:
+            if not bundles:
+                logger.debug("Unified sweep: no view passed joint validation")
                 result = None
             else:
-                # === Pass 2: Frontal re-render for accurate nasion ===
-                frontal_cam_pos = head_centroid + pass1_fwd * cam_distance
-                plotter.camera_position = [
-                    frontal_cam_pos.tolist(),
-                    head_centroid.tolist(),
-                    [1, 0, 0],
-                ]
-                plotter.render()
-                frontal_img = plotter.screenshot(return_img=True)
-                H_f, W_f = frontal_img.shape[:2]
-
-                mp_frontal = mp.Image(
-                    image_format=mp.ImageFormat.SRGB,
-                    data=np.ascontiguousarray(frontal_img),
+                bundles.sort(key=lambda b: b["yaw_abs"])
+                best = bundles[0]
+                logger.debug(
+                    f"Unified sweep: {len(bundles)} valid views, best "
+                    f"theta={best['theta_deg']}deg pitch={best['pitch_deg']}deg "
+                    f"|yaw|={best['yaw_abs']:.1f}"
                 )
-                frontal_det = lm.detect(mp_frontal)
-
-                frontal_reliable = False
-                face_contour = None
-                final_nz_3d = pass1_nz_3d
-                final_nose_3d = pass1_nose_3d
-
-                if frontal_det.face_landmarks:
-                    f_face = frontal_det.face_landmarks[0]
-
-                    # Back-project nasion (landmark 168) from frontal view
-                    nz_lm_f = f_face[168]
-                    picker_f = vtk.vtkCellPicker()
-                    picker_f.SetTolerance(0.01)
-                    picker_f.Pick(
-                        float(int(nz_lm_f.x * W_f)),
-                        float(H_f - 1 - int(nz_lm_f.y * H_f)),
-                        0, plotter.renderer,
-                    )
-                    nz_3d_f = np.array(picker_f.GetPickPosition())
-
-                    # Back-project nose tip (landmark 1) from frontal view
-                    nose_lm_f = f_face[1]
-                    picker_f.Pick(
-                        float(int(nose_lm_f.x * W_f)),
-                        float(H_f - 1 - int(nose_lm_f.y * H_f)),
-                        0, plotter.renderer,
-                    )
-                    nose_3d_f = np.array(picker_f.GetPickPosition())
-
-                    # Validate: both on mesh, nasion above nose tip
-                    if (not np.allclose(nz_3d_f, 0)
-                            and not np.allclose(nose_3d_f, 0)
-                            and nz_3d_f[0] > nose_3d_f[0]):
-                        final_nz_3d = nz_3d_f.copy()
-                        final_nose_3d = nose_3d_f.copy()
-                        frontal_reliable = True
-                        logger.debug(
-                            f"Pass 2 (frontal): nasion={final_nz_3d}, "
-                            f"nose={final_nose_3d}"
-                        )
-
-                        # === Extract face oval contour ===
-                        _FACE_OVAL_INDICES = [
-                            10, 338, 297, 332, 284, 251, 389, 356,
-                            454, 323, 361, 288, 397, 365, 379, 378,
-                            400, 377, 152, 148, 176, 149, 150, 136,
-                            172, 58, 132, 93, 234, 127, 162, 21,
-                            54, 103, 67, 109,
-                        ]
-                        contour_pts = []
-                        picker_c = vtk.vtkCellPicker()
-                        picker_c.SetTolerance(0.01)
-                        for idx in _FACE_OVAL_INDICES:
-                            lm_pt = f_face[idx]
-                            picker_c.Pick(
-                                float(int(lm_pt.x * W_f)),
-                                float(H_f - 1 - int(lm_pt.y * H_f)),
-                                0, plotter.renderer,
-                            )
-                            pt_3d = np.array(picker_c.GetPickPosition())
-                            if not np.allclose(pt_3d, 0):
-                                contour_pts.append(pt_3d.copy())
-
-                        if len(contour_pts) >= 20:
-                            raw_contour = np.array(contour_pts)
-                            face_contour = _filter_contour_outliers(
-                                raw_contour
-                            )
-                            n_removed = len(raw_contour) - len(face_contour)
-                            if len(face_contour) < 20:
-                                face_contour = raw_contour
-                                n_removed = 0
-                            logger.debug(
-                                f"Face oval: {len(contour_pts)}/36 "
-                                f"back-projected, {n_removed} outliers removed"
-                            )
-                        else:
-                            logger.debug(
-                                f"Face oval: only {len(contour_pts)}/36 "
-                                f"back-projected, skipping"
-                            )
-                    else:
-                        logger.debug(
-                            "Pass 2: frontal back-projection failed validation"
-                        )
-                else:
-                    logger.debug("Pass 2: no face in frontal re-render")
-
-                # Recompute forward from frontal nose tip if available
-                if frontal_reliable:
-                    final_fwd = final_nose_3d - head_centroid
-                    final_fwd[0] = 0.0
-                    fn = np.linalg.norm(final_fwd)
-                    if fn > 1e-6:
-                        final_fwd = final_fwd / fn
-                    else:
-                        final_fwd = pass1_fwd.copy()
-                else:
-                    final_fwd = pass1_fwd.copy()
-
                 result = (
-                    final_nose_3d.copy(),
-                    final_fwd,
-                    final_nz_3d.copy(),
-                    frontal_reliable,
-                    face_contour,
+                    best["nose_3d"].copy(),
+                    best["fwd"].copy(),
+                    best["nasion_3d"].copy(),
+                    True,  # frontal_reliable: bundle jointly validated
+                    best["face_contour"],
+                    best["r_eye_3d"].copy(),
+                    best["l_eye_3d"].copy(),
                 )
     except Exception as e:
         logger.warning(f"MediaPipe detection error: {e}")
@@ -579,61 +581,16 @@ def _try_direction(
 # Utility functions
 # ---------------------------------------------------------------------------
 
-def _merge_close_vertices(vertices: np.ndarray, tol: float = 0.01) -> np.ndarray:
-    """Merge spatially coincident vertices (seam duplicates).
-
-    Returns a deduplicated vertex array. Uses union-find to group vertices
-    within tolerance, then averages their positions.
-
-    Args:
-        vertices: Mesh vertices of shape (N, 3).
-        tol: Distance tolerance in mm.
-
-    Returns:
-        Unique vertices array of shape (M, 3) where M <= N.
-    """
-    tree = KDTree(vertices)
-    pairs = tree.query_pairs(r=tol)
-
-    if not pairs:
-        return vertices.copy()
-
-    n = len(vertices)
-    parent = np.arange(n)
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    for a, b in pairs:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for i in range(n):
-        parent[i] = find(i)
-
-    unique_roots, inverse = np.unique(parent, return_inverse=True)
-    n_new = len(unique_roots)
-
-    new_verts = np.zeros((n_new, 3))
-    counts = np.zeros(n_new)
-    for i in range(n):
-        new_verts[inverse[i]] += vertices[i]
-        counts[inverse[i]] += 1
-    new_verts /= counts[:, None]
-
-    logger.debug(f"Merged seam vertices: {n} -> {n_new}")
-    return new_verts
-
 
 def _isolate_head_vertices(
     vertices: np.ndarray,
     max_head_height: float = 280.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Isolate head vertices by cropping to within max_head_height of the top.
+
+    Note: This is a fast height-based heuristic for nasion detection only.
+    The public ``isolate_head()`` in face_detector.py uses sphere-based
+    filtering that preserves mesh connectivity for downstream processing.
 
     Args:
         vertices: Mesh vertices of shape (N, 3).

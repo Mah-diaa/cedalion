@@ -95,6 +95,64 @@ def normalize_axes(
     return rotated_surface, rotated_nasion, R
 
 
+def _largest_component_mask(mesh) -> np.ndarray:
+    """Boolean vertex mask selecting the largest connected component.
+
+    Einstar scans are non-watertight and frequently contain tiny floating
+    mesh fragments (loose triangles, cable shreds, background patches)
+    that sit far outside the head. Any step that uses vertex extrema
+    (e.g. head sphere centroid, lateral-widest heuristics) will be
+    dragged off into empty space by those fragments. Stripping them
+    up-front prevents that.
+
+    Uses ``trimesh.graph.connected_component_labels`` on face adjacency
+    rather than ``mesh.split(only_watertight=False)`` — split allocates
+    one full ``Trimesh`` per component and can OOM when a scan has
+    thousands of tiny fragments. Labels give one int per face with
+    zero per-component allocation.
+
+    Args:
+        mesh: A ``trimesh.Trimesh`` instance.
+
+    Returns:
+        Boolean array of shape ``(n_vertices,)``. All-True if the mesh
+        is empty or already a single connected component.
+    """
+    import trimesh
+    n_verts = len(mesh.vertices)
+    n_faces = len(mesh.faces)
+    if n_faces == 0:
+        return np.ones(n_verts, dtype=bool)
+
+    # Einstar OBJs duplicate vertices along UV seams for texturing. The
+    # default trimesh.Trimesh.merge_vertices() does NOT merge across UV
+    # seams (it preserves texture), so face adjacency on the raw mesh
+    # (or on a merge_vertices'd copy) over-fragments the head into
+    # thousands of islands. We need POSITION-only merging for
+    # connectivity analysis: unique_rows on vertex coordinates gives a
+    # canonical-id mapping that heals the seams.
+    unique_idx, inverse = trimesh.grouping.unique_rows(
+        np.asarray(mesh.vertices)
+    )
+    canonical_faces = inverse[mesh.faces]
+    adjacency = trimesh.graph.face_adjacency(faces=canonical_faces)
+    face_labels = trimesh.graph.connected_component_labels(
+        adjacency, node_count=n_faces
+    )
+    counts = np.bincount(face_labels)
+    if len(counts) <= 1:
+        return np.ones(n_verts, dtype=bool)
+    biggest_label = int(np.argmax(counts))
+    face_mask = face_labels == biggest_label
+
+    # Apply face mask to the ORIGINAL faces -> original vertex indices
+    # (so colors/UVs/normals attached to the caller's mesh stay valid).
+    kept_vidx = np.unique(mesh.faces[face_mask])
+    mask = np.zeros(n_verts, dtype=bool)
+    mask[kept_vidx] = True
+    return mask
+
+
 def isolate_head(
     surface: cdc.TrimeshSurface,
     nasion: np.ndarray,
@@ -137,6 +195,10 @@ def isolate_head(
     # Sphere mask
     dist = np.linalg.norm(vertices - center, axis=1)
     head_mask = dist < radius
+
+    # Always strip disconnected fragments (floating triangles, cables,
+    # background patches). No-op on clean single-component scans.
+    head_mask = head_mask & _largest_component_mask(surface.mesh)
 
     # If the sphere captures almost everything, skip trimming
     if head_mask.sum() < 100 or head_mask.mean() > 0.95:

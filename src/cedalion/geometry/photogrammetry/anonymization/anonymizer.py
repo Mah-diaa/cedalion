@@ -17,11 +17,10 @@ from scipy import sparse
 from scipy.sparse.linalg import spsolve
 from scipy.spatial import KDTree
 import trimesh
-import xarray as xr
-
 import cedalion.dataclasses as cdc
 import cedalion.typing as cdt
 from cedalion import Quantity, units
+from ._vertex_utils import deduplicate_vertices
 
 
 logger = logging.getLogger("cedalion")
@@ -104,34 +103,6 @@ def _build_adjacency_matrix(mesh: trimesh.Trimesh) -> dict[int, set[int]]:
     return adjacency
 
 
-def _compute_laplacian_displacement(
-    vertices: np.ndarray,
-    adjacency: dict[int, set[int]],
-) -> np.ndarray:
-    """Compute Laplacian displacement for each vertex.
-
-    The Laplacian displacement is the difference between a vertex and the
-    average of its neighbors.
-
-    Args:
-        vertices: Vertex positions array of shape (n_vertices, 3)
-        adjacency: Vertex adjacency dictionary
-
-    Returns:
-        Laplacian displacement array of shape (n_vertices, 3)
-    """
-    n_vertices = len(vertices)
-    displacement = np.zeros_like(vertices)
-
-    for i in range(n_vertices):
-        neighbors = adjacency[i]
-        if len(neighbors) > 0:
-            neighbor_avg = np.mean(vertices[list(neighbors)], axis=0)
-            displacement[i] = neighbor_avg - vertices[i]
-
-    return displacement
-
-
 def _merge_seam_vertices(
     mesh: trimesh.Trimesh, tol: float = 0.01
 ) -> tuple[trimesh.Trimesh, np.ndarray, list[list[int]]]:
@@ -151,55 +122,15 @@ def _merge_seam_vertices(
         - old_to_new: Array mapping old vertex index to new vertex index
         - new_to_old: List where new_to_old[i] = list of old indices that merged
     """
-    verts = mesh.vertices
-    n = len(verts)
+    n = len(mesh.vertices)
 
-    # Find groups of coincident vertices
-    tree = KDTree(verts)
-    pairs = tree.query_pairs(r=tol)
+    new_verts, old_to_new, new_to_old = deduplicate_vertices(
+        mesh.vertices, tol=tol
+    )
+    n_new = len(new_verts)
 
-    if not pairs:
-        # No duplicates — return copy with identity mapping
-        old_to_new = np.arange(n)
-        new_to_old = [[i] for i in range(n)]
+    if n_new == n:
         return mesh.copy(), old_to_new, new_to_old
-
-    # Union-find to group coincident vertices
-    parent = np.arange(n)
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for a, b in pairs:
-        union(a, b)
-
-    # Flatten parent pointers
-    for i in range(n):
-        parent[i] = find(i)
-
-    # Build compact index mapping
-    unique_roots, inverse = np.unique(parent, return_inverse=True)
-    old_to_new = inverse
-    n_new = len(unique_roots)
-
-    # Build reverse mapping
-    new_to_old = [[] for _ in range(n_new)]
-    for old_idx in range(n):
-        new_to_old[old_to_new[old_idx]].append(old_idx)
-
-    # Average positions of merged vertices
-    new_verts = np.zeros((n_new, 3))
-    for new_idx in range(n_new):
-        old_indices = new_to_old[new_idx]
-        new_verts[new_idx] = verts[old_indices].mean(axis=0)
 
     # Re-index faces and remove degenerate triangles
     new_faces = old_to_new[mesh.faces]

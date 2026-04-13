@@ -30,6 +30,12 @@ Initial Contributors:
     - Face Anonymization Project | 2024
 """
 
+from .anonymizer import (
+    AnonymizationConfig,
+    AnonymizationMethod,
+    AnonymizationResult,
+    anonymize_facial_region,
+)
 from .face_detector import (
     normalize_axes,
     isolate_head,
@@ -38,6 +44,7 @@ from .face_detector import (
 )
 from .nasion_detector import detect_nasion_auto
 from .ui import pick_nasion
+from .validator import validate_anonymization
 
 
 __all__ = [
@@ -50,4 +57,11 @@ __all__ = [
     # Landmark and face mask detection
     "detect_landmarks_from_nasion",
     "get_facial_region_mask_from_nasion",
+    # Anonymization
+    "AnonymizationConfig",
+    "AnonymizationMethod",
+    "AnonymizationResult",
+    "anonymize_facial_region",
+    # Validation
+    "validate_anonymization",
 ]
