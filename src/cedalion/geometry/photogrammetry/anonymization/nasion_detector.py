@@ -194,8 +194,10 @@ def _find_nose_tip_mediapipe(
         import mediapipe as mp
         import vtk
     except ImportError as e:
-        logger.info(f"MediaPipe detection unavailable: {e}")
-        return None
+        raise ImportError(
+            "Automatic nasion detection requires mediapipe. "
+            "Install with: pip install cedalion[anonymization]"
+        ) from e
 
     if not _MODEL_PATH.exists():
         logger.info(f"MediaPipe model not found at {_MODEL_PATH}")
