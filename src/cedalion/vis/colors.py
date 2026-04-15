@@ -68,10 +68,15 @@ def p_values_cmap() -> tuple[Normalize, LinearSegmentedColormap]:
 
 
 def threshold_cmap(
-    name, vmin, vmax, threshold, higher_is_better=True
+    name,
+    vmin,
+    vmax,
+    threshold,
+    higher_is_better=True,
+    colors=["#000000", "#DC3220", "#5D3A9B", "#0C7BDC"],
 ) -> tuple[Normalize, LinearSegmentedColormap]:
     """A read and blue colormap with a distinctive break at a threshold value."""
-    colors = ["#000000", "#DC3220", "#5D3A9B", "#0C7BDC"]
+
     values = [vmin, threshold, threshold, vmax]
 
     if not higher_is_better:
@@ -90,10 +95,11 @@ def threshold_cmap(
     return norm, cmap
 
 
-def mask_cmap(true_is_good=True) -> tuple[Normalize, LinearSegmentedColormap]:
+def mask_cmap(
+    true_is_good=True, colors=["#DC3220", "#DC3220", "#0C7BDC", "#0C7BDC"]
+) -> tuple[Normalize, LinearSegmentedColormap]:
     """A red and blue colormap to color binary masks."""
 
-    colors = ["#DC3220", "#DC3220", "#0C7BDC", "#0C7BDC"]
     if not true_is_good:
         colors = colors[::-1]
 
