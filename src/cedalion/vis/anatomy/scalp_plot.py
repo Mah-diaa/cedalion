@@ -170,12 +170,15 @@ def scalp_plot(
         if (normed_v < 0).any():
             extend_lower = True
 
+        # color
         c = cmap(normed_v)
-        line_fmt = {'c' : c, 'ls' : '-', 'lw' : channel_lw, 'alpha' : 1.0}
 
+        # opacity
+        alpha = 1.0
         if (min_metric is not None) and (v < min_metric):
-            line_fmt['alpha'] = 0.4
+            alpha = 0.4
 
+        # zorder
         if zorder is None:
             zorder_line = 0
         elif zorder == "ascending":
@@ -185,8 +188,7 @@ def scalp_plot(
         else:
             raise ValueError(f"unexpected value '{zorder}' for zorder.")
 
-
-        #ax.plot([s[0], d[0]], [s[1], d[1]], zorder=zorder_line, **line_fmt)
+        # curvature
         if draw_arcs:
             rad = ((dist - smallest_channel_dist) / channel_dist_range).magnitude * 0.15
         else:
@@ -199,7 +201,7 @@ def scalp_plot(
             arrowstyle="-",
             color=c,
             linewidth=channel_lw,
-            alpha=1.0,
+            alpha=alpha,
             zorder=zorder_line,
         )
         ax.add_patch(arrow)

@@ -13,6 +13,8 @@
   and `scipy.sparse` arrays, by [Eike Middell](https://github.com/emiddell).
 - Added `cedalion.geometry.landmarks.normalize_landmarks_labels` to map alternative landmark names (e.g., "nasion", "left ear", "nz") to their canonical 10-10 system labels (e.g. Nz, LPA). The function handles now case-insensitive matching and supports common naming conventions. Usage: `geo3d = normalize_landmarks_labels(geo3d)` before calling registration or plotting functions, by [Mohammad Orabe](https://github.com/orabe). ([#84](https://github.com/ibs-lab/cedalion/issues/84))
 - Added `cedalion.dot.ImageRecon.get_image_noise_posterior`, by [Laura Carlton](https://github.com/lauracarlton). ([#134](https://github.com/ibs-lab/cedalion/pull/134))
+- Added the option `draw_arcs` to `cedalion.vis.anatomy.scalp_plot`. If set to True, channels are drawn as curved lines to reduce overlap, by [Eike Middell](https://github.com/emiddell).
+
 ### Changed
 - The package `cedalion.sigproc.motion_correct` was renamed to `cedalion.sigproc.motion`.
 - The ICA-EBM and ICA_ERBM implementations were moved into `cedalion.sigdecomp.unimodal`.
