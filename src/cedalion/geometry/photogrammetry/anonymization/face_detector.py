@@ -1,8 +1,10 @@
 """Facial region detection for photogrammetry scans.
 
 Provides axis normalization, head isolation, landmark detection from a
-user-provided nasion (Nz) position, and facial region mask generation
-using MediaPipe face contour back-projection.
+user-provided nasion (Nz), and facial region mask generation. Supports both
+a MediaPipe contour path (via ``get_facial_region_mask_from_nasion``) and a
+pure-geometric landmark-only path (``align_axes_from_landmarks`` +
+``detect_cap_boundary`` + ``face_mask_from_landmarks``).
 
 Initial Contributors:
     - Face Anonymization Project | 2024
@@ -545,3 +547,231 @@ def _validate_landmark_configuration(
         logger.warning(
             f"LPA/RPA asymmetry is large (offsets: {lpa_offset:.1f} vs {rpa_offset:.1f}mm)"
         )
+
+
+def align_axes_from_landmarks(
+    surface: cdc.TrimeshSurface,
+    landmarks: cdt.LabeledPointCloud,
+) -> tuple[cdc.TrimeshSurface, cdt.LabeledPointCloud, np.ndarray]:
+    """Derive full rotation from 5 landmarks and apply to mesh and landmarks.
+
+    ``normalize_axes()`` only rotates around X. This function uses the full 5
+    landmark set to align the head to the canonical frame:
+
+        Z = lateral (Lpa - Rpa, pointing left)
+        Y = anterior (Nz - ear_mid, orthogonal to Z)
+        X = up (cross(Y, Z))
+
+    Sign checks ensure Cz points +X and Nz points +Y.
+
+    Args:
+        surface: Axis-normalized TrimeshSurface (post ``normalize_axes`` and
+            ``isolate_head``).
+        landmarks: LabeledPointCloud with labels Nz, Iz, Cz, Lpa, Rpa
+            (matching the surface frame).
+
+    Returns:
+        Tuple of (aligned_surface, aligned_landmarks, rotation_matrix).
+        ``rotation_matrix`` is 3x3 and maps input-frame vectors to the aligned
+        frame (apply as ``v @ R.T``).
+    """
+    import trimesh
+
+    lm = landmarks.pint.dequantify().values
+    labels = list(landmarks["label"].values)
+    idx = {lbl: i for i, lbl in enumerate(labels)}
+
+    required = {"Nz", "Iz", "Cz", "Lpa", "Rpa"}
+    missing = required - set(labels)
+    if missing:
+        raise ValueError(f"Missing landmarks for alignment: {missing}")
+
+    Nz = lm[idx["Nz"]]
+    Cz = lm[idx["Cz"]]
+    Lpa = lm[idx["Lpa"]]
+    Rpa = lm[idx["Rpa"]]
+    ear_mid = 0.5 * (Lpa + Rpa)
+
+    z_ax = Lpa - Rpa
+    z_ax = z_ax / np.linalg.norm(z_ax)
+
+    nz_dir = Nz - ear_mid
+    nz_dir = nz_dir - np.dot(nz_dir, z_ax) * z_ax
+    y_ax = nz_dir / np.linalg.norm(nz_dir)
+
+    x_ax = np.cross(y_ax, z_ax)
+
+    if np.dot(Cz - ear_mid, x_ax) < 0:
+        x_ax = -x_ax
+    if np.dot(Nz - ear_mid, y_ax) < 0:
+        y_ax = -y_ax
+    z_ax = np.cross(x_ax, y_ax)
+
+    R = np.vstack([x_ax, y_ax, z_ax])
+
+    aligned_verts = np.asarray(surface.mesh.vertices) @ R.T
+    new_mesh = trimesh.Trimesh(
+        vertices=aligned_verts,
+        faces=surface.mesh.faces,
+        visual=surface.mesh.visual,
+        process=False,
+    )
+    aligned_surface = cdc.TrimeshSurface(
+        new_mesh, crs=surface.crs, units=surface.units,
+    )
+
+    aligned_lm = lm @ R.T
+    aligned_landmarks = landmarks.pint.dequantify().copy(data=aligned_lm).pint.quantify()
+
+    return aligned_surface, aligned_landmarks, R
+
+
+def detect_cap_boundary(
+    verts: np.ndarray,
+    Nz: np.ndarray,
+    Cz: np.ndarray,
+    ear_mid: np.ndarray,
+    mid_z: float,
+    band_width: float = 15.0,
+    bin_size: float = 2.0,
+    foot_grad_threshold: float = 0.2,
+) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
+    """Find the X height where the EEG cap front edge sits.
+
+    Scans upward from Nz along the midline and records max-Y per X-bin. The cap
+    protrudes in +Y, so Y-max along the midline lives on the cap. The cap edge
+    is the foot of the steep rise leading to the peak: walk back from the peak
+    until the smoothed gradient drops below ``foot_grad_threshold``.
+
+    Expects the aligned frame (X=up, Y=anterior, Z=left).
+
+    Args:
+        verts: Mesh vertices, shape (N, 3).
+        Nz: Nasion position.
+        Cz: Cz position.
+        ear_mid: Midpoint of Lpa/Rpa.
+        mid_z: Midline Z value (e.g. ``0.5 * (Lpa[2] + Rpa[2])``).
+        band_width: Z-band half-width for the midline Y-profile (mm).
+        bin_size: X-bin size for the Y-profile (mm).
+        foot_grad_threshold: dY/dX below this value marks the foot of the rise.
+
+    Returns:
+        Tuple of (cap_x, profile_x, profile_y_raw, profile_y_smooth).
+    """
+    from scipy.signal import savgol_filter
+
+    in_band = np.abs(verts[:, 2] - mid_z) < band_width
+    above_nz = verts[:, 0] > Nz[0]
+    anterior = verts[:, 1] > ear_mid[1]
+    sel_verts = verts[in_band & above_nz & anterior]
+
+    bins = np.arange(Nz[0], Cz[0], bin_size)
+    bin_centers = bins[:-1] + bin_size / 2
+    max_y = np.full(len(bin_centers), np.nan)
+
+    for i in range(len(bin_centers)):
+        in_bin = (sel_verts[:, 0] >= bins[i]) & (sel_verts[:, 0] < bins[i + 1])
+        if in_bin.any():
+            max_y[i] = sel_verts[in_bin, 1].max()
+
+    valid = ~np.isnan(max_y)
+    if valid.sum() < 7:
+        fallback = 0.5 * (Nz[0] + Cz[0])
+        return fallback, bin_centers[valid], max_y[valid], max_y[valid]
+
+    xv = bin_centers[valid]
+    yv = max_y[valid]
+
+    win = min(11, len(yv) if len(yv) % 2 == 1 else len(yv) - 1)
+    win = max(win, 5)
+    yv_s = savgol_filter(yv, window_length=win, polyorder=2)
+
+    peak_idx = int(np.argmax(yv_s))
+    grad = np.gradient(yv_s, xv)
+    cap_x = xv[0]
+    for i in range(peak_idx - 1, 0, -1):
+        if grad[i] < foot_grad_threshold:
+            cap_x = xv[i]
+            break
+
+    return cap_x, xv, yv, yv_s
+
+
+def face_mask_from_landmarks(
+    verts: np.ndarray,
+    Nz: np.ndarray,
+    Iz: np.ndarray,
+    Cz: np.ndarray,
+    Lpa: np.ndarray,
+    Rpa: np.ndarray,
+    cap_x: float | None = None,
+    ear_delete_radius: float = 40.0,
+) -> tuple[np.ndarray, dict]:
+    """Build face + ear deletion mask from the 5 landmarks (aligned frame).
+
+    Mask is the union of two regions, both clamped below the cap boundary:
+
+    1. Face region: anterior to the ear coronal plane (Y > ear_mid_Y).
+    2. Ear spheres: ``ear_delete_radius`` mm around Lpa and Rpa.
+
+    Expects the aligned frame (X=up, Y=anterior, Z=left).
+
+    Args:
+        verts: Mesh vertices, shape (N, 3).
+        Nz, Iz, Cz, Lpa, Rpa: 5 landmark positions in the aligned frame.
+        cap_x: Upper bound X value (typically from ``detect_cap_boundary``).
+            Defaults to Nz[0] if not provided.
+        ear_delete_radius: Sphere radius around Lpa/Rpa in mm.
+
+    Returns:
+        Tuple of (mask, info). ``mask`` is a boolean array of shape (N,).
+        ``info`` has keys ``upper_bound``, ``ear_mid``, and ``counts``
+        (per-region vertex counts).
+    """
+    ear_mid = 0.5 * (Lpa + Rpa)
+    upper_bound = cap_x if cap_x is not None else Nz[0]
+
+    below_cap = verts[:, 0] < upper_bound
+    anterior = verts[:, 1] > ear_mid[1]
+    face_region = below_cap & anterior
+
+    d_lpa = np.linalg.norm(verts - Lpa, axis=1)
+    d_rpa = np.linalg.norm(verts - Rpa, axis=1)
+    ear_region = ((d_lpa < ear_delete_radius) | (d_rpa < ear_delete_radius)) & below_cap
+
+    mask = face_region | ear_region
+
+    info = {
+        "upper_bound": upper_bound,
+        "ear_mid": ear_mid,
+        "counts": {
+            "below_cap": int(below_cap.sum()),
+            "face_region": int(face_region.sum()),
+            "ear_region": int(ear_region.sum()),
+            "all": int(mask.sum()),
+        },
+    }
+    return mask, info
+
+
+def delete_masked_vertices(
+    surface: cdc.TrimeshSurface,
+    mask: np.ndarray,
+) -> cdc.TrimeshSurface:
+    """Drop triangles touching any masked vertex and strip unreferenced vertices.
+
+    Args:
+        surface: Input TrimeshSurface.
+        mask: Boolean array of shape (n_vertices,). True = vertex to remove.
+
+    Returns:
+        New TrimeshSurface with masked vertices (and the faces touching them)
+        removed. CRS and units are preserved.
+    """
+    mesh_copy = surface.mesh.copy()
+    faces_to_remove = mask[mesh_copy.faces].any(axis=1)
+    mesh_copy.update_faces(~faces_to_remove)
+    mesh_copy.remove_unreferenced_vertices()
+    return cdc.TrimeshSurface(
+        mesh=mesh_copy, crs=surface.crs, units=surface.units,
+    )

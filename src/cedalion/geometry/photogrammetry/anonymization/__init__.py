@@ -35,6 +35,10 @@ from .face_detector import (
     isolate_head,
     detect_landmarks_from_nasion,
     get_facial_region_mask_from_nasion,
+    align_axes_from_landmarks,
+    detect_cap_boundary,
+    face_mask_from_landmarks,
+    delete_masked_vertices,
 )
 from .nasion_detector import detect_nasion_auto
 from .ui import pick_nasion
@@ -51,6 +55,11 @@ __all__ = [
     # Landmark and face mask detection
     "detect_landmarks_from_nasion",
     "get_facial_region_mask_from_nasion",
+    # Landmark-only geometric pipeline
+    "align_axes_from_landmarks",
+    "detect_cap_boundary",
+    "face_mask_from_landmarks",
+    "delete_masked_vertices",
     # Validation
     "validate_anonymization",
 ]
