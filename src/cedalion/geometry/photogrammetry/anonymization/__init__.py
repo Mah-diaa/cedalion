@@ -39,9 +39,12 @@ from .face_detector import (
     detect_cap_boundary,
     face_mask_from_landmarks,
     delete_masked_vertices,
+    eye_plane_rotation_matrix,
+    heuristic_lpa_rpa,
+    mediapipe_face_mask_from_contour,
 )
 from .nasion_detector import detect_nasion_auto
-from .ui import pick_nasion
+from .ui import pick_nasion, refine_mask_interactive
 from .validator import validate_anonymization
 
 
@@ -60,6 +63,12 @@ __all__ = [
     "detect_cap_boundary",
     "face_mask_from_landmarks",
     "delete_masked_vertices",
+    # MediaPipe-pipeline helpers
+    "eye_plane_rotation_matrix",
+    "heuristic_lpa_rpa",
+    "mediapipe_face_mask_from_contour",
+    # Interactive refinement
+    "refine_mask_interactive",
     # Validation
     "validate_anonymization",
 ]

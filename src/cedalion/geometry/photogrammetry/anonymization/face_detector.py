@@ -775,3 +775,194 @@ def delete_masked_vertices(
     return cdc.TrimeshSurface(
         mesh=mesh_copy, crs=surface.crs, units=surface.units,
     )
+
+
+def eye_plane_rotation_matrix(
+    r_eye_3d: np.ndarray,
+    l_eye_3d: np.ndarray,
+    forward_dir: np.ndarray,
+) -> np.ndarray:
+    """Build a rotation that sends the eye line to +Z and the forward ref to +Y.
+
+    Rows of the returned matrix are the new basis vectors expressed in the old
+    frame: ``p_new = R @ (p_old - center) + center``. The third row (Z) is the
+    normalized eye line (L - R); the second row (Y) is the component of
+    ``forward_dir`` orthogonal to the eye line; the first row (X) is ``Y x Z``
+    so the result is head-up and right-handed.
+
+    Typically fed MediaPipe eye landmarks plus the MediaPipe-derived forward
+    direction, but it is pure geometry and works with any eye-line + forward
+    reference.
+
+    Args:
+        r_eye_3d: Right eye position, shape (3,).
+        l_eye_3d: Left eye position, shape (3,).
+        forward_dir: Approximate anterior direction, shape (3,).
+
+    Returns:
+        3x3 rotation matrix.
+    """
+    eye_dir = np.asarray(l_eye_3d - r_eye_3d, dtype=float)
+    z_new = eye_dir / np.linalg.norm(eye_dir)
+
+    fref = np.asarray(forward_dir, dtype=float)
+    fref = fref / np.linalg.norm(fref)
+    y_new = fref - np.dot(fref, z_new) * z_new
+    y_new = y_new / np.linalg.norm(y_new)
+
+    x_new = np.cross(y_new, z_new)
+    x_new = x_new / np.linalg.norm(x_new)
+    return np.vstack([x_new, y_new, z_new])
+
+
+def heuristic_lpa_rpa(
+    head_verts: np.ndarray,
+    eye_x: float,
+    centroid_y: float,
+    x_tol: float = 20.0,
+    x_offset: float = -15.0,
+    y_tol: float = 50.0,
+    y_forward: float = 35.0,
+    radius: float = 15.0,
+) -> tuple[dict | None, dict | None]:
+    """Approximate LPA/RPA as uncertainty spheres (not single points).
+
+    Slices a horizontal band at roughly ear height (``eye_x + x_offset``), then
+    picks the max-Z vertex as LPA center and min-Z as RPA center. Centers are
+    nudged forward by ``y_forward`` to account for the heuristic's tendency to
+    land behind the tragus.
+
+    Expects ``head_verts`` in the eye-plane canonical frame (X=up, Y=anterior,
+    Z=left). Returns ``(None, None)`` if fewer than 10 candidates are in the
+    band.
+
+    Args:
+        head_verts: Mesh vertices in eye-plane frame, shape (N, 3).
+        eye_x: X value of the eye line (average of both eyes).
+        centroid_y: Head centroid Y, for Y-band selection.
+        x_tol: X half-width of the ear-height band (mm).
+        x_offset: Offset from ``eye_x`` to ear line (mm, negative = below eyes).
+        y_tol: Y half-width of the ear-region band (mm).
+        y_forward: Forward correction applied to both centers (mm).
+        radius: Uncertainty-sphere radius (mm).
+
+    Returns:
+        Tuple of ``(lpa_dict, rpa_dict)``, each with keys ``center`` (np.ndarray,
+        shape (3,)) and ``radius`` (float). ``(None, None)`` if the band has
+        too few candidates.
+    """
+    x_band = np.abs(head_verts[:, 0] - (eye_x + x_offset)) < x_tol
+    y_band = np.abs(head_verts[:, 1] - centroid_y) < y_tol
+    mask = x_band & y_band
+    candidates = head_verts[mask]
+    if len(candidates) < 10:
+        return None, None
+
+    lpa_center = candidates[int(np.argmax(candidates[:, 2]))].astype(float).copy()
+    rpa_center = candidates[int(np.argmin(candidates[:, 2]))].astype(float).copy()
+    lpa_center[1] += y_forward
+    rpa_center[1] += y_forward
+
+    return (
+        {"center": lpa_center, "radius": radius},
+        {"center": rpa_center, "radius": radius},
+    )
+
+
+def mediapipe_face_mask_from_contour(
+    verts: np.ndarray,
+    nasion: np.ndarray,
+    lpa_center: np.ndarray,
+    lpa_radius: float,
+    rpa_center: np.ndarray,
+    rpa_radius: float,
+    face_contour_rotated: np.ndarray | None = None,
+    rect_half_width: float = 15.0,
+    forehead_fallback: float = 50.0,
+) -> tuple[np.ndarray, dict]:
+    """Build a deletion mask from MediaPipe face contour + heuristic ears.
+
+    Two-region mask in the eye-plane canonical frame (X=up, Y=anterior, Z=left):
+
+    1. ``face_below`` -- everything below the nasion, anterior of the ears,
+       strictly between the two ear spheres in Z.
+    2. ``face_sides`` -- between the nasion (bottom) and a per-vertex forehead
+       upper bound (top), same Z/Y constraints, EXCLUDING a vertical strip
+       around the nasion Z (``rect_half_width``) that is kept for registration.
+
+    The per-vertex forehead upper bound is interpolated from the rotated
+    MediaPipe face-oval arc above the nasion, using KDTree on Z. When no
+    contour is supplied the upper bound falls back to
+    ``nasion[0] + forehead_fallback``.
+
+    Args:
+        verts: Mesh vertices in eye-plane frame, shape (N, 3).
+        nasion: Rotated nasion position, shape (3,).
+        lpa_center: LPA heuristic center in eye-plane frame, shape (3,).
+        lpa_radius: LPA uncertainty-sphere radius (mm).
+        rpa_center: RPA heuristic center in eye-plane frame, shape (3,).
+        rpa_radius: RPA uncertainty-sphere radius (mm).
+        face_contour_rotated: MediaPipe face oval points already rotated into
+            the eye-plane frame, shape (M, 3). If None or contains fewer than 3
+            points above the nasion, uses the fallback.
+        rect_half_width: Z half-width of the preserved nasion strip (mm).
+        forehead_fallback: Upper-bound offset above nasion if no contour (mm).
+
+    Returns:
+        Tuple of (mask, info). ``mask`` is a boolean array of shape (N,).
+        ``info`` has keys ``arc_source`` (str), ``forehead_x_range``
+        (tuple of float), ``y_cut`` (float), ``z_band`` (tuple of float),
+        ``counts`` (dict of per-region counts).
+    """
+    z_band = (verts[:, 2] > rpa_center[2] + rpa_radius) & (
+        verts[:, 2] < lpa_center[2] - lpa_radius
+    )
+    y_cut = min(0.5 * (lpa_center[1] + rpa_center[1]), nasion[1])
+    front_half = verts[:, 1] > y_cut
+
+    if face_contour_rotated is not None:
+        contour = np.asarray(face_contour_rotated)
+        forehead_arc = contour[contour[:, 0] > nasion[0]]
+    else:
+        forehead_arc = np.empty((0, 3))
+
+    if len(forehead_arc) >= 3:
+        arc_tree = KDTree(forehead_arc[:, 2:3])
+        _, arc_idx = arc_tree.query(verts[:, 2:3], k=1)
+        forehead_x_per_vertex = forehead_arc[arc_idx, 0]
+        arc_source = f"MediaPipe forehead arc ({len(forehead_arc)} pts)"
+    else:
+        forehead_x_per_vertex = np.full(len(verts), nasion[0] + forehead_fallback)
+        arc_source = f"fallback (nasion + {forehead_fallback:.0f}mm)"
+
+    face_below = (verts[:, 0] < nasion[0]) & z_band & front_half
+
+    in_arc_band = (verts[:, 0] >= nasion[0]) & (verts[:, 0] < forehead_x_per_vertex)
+    nasion_strip = (
+        (np.abs(verts[:, 2] - nasion[2]) < rect_half_width)
+        & in_arc_band
+        & front_half
+    )
+    face_sides = in_arc_band & z_band & front_half & ~nasion_strip
+
+    mask = face_below | face_sides
+
+    info = {
+        "arc_source": arc_source,
+        "forehead_x_range": (
+            float(forehead_x_per_vertex.min()),
+            float(forehead_x_per_vertex.max()),
+        ),
+        "y_cut": float(y_cut),
+        "z_band": (
+            float(rpa_center[2] + rpa_radius),
+            float(lpa_center[2] - lpa_radius),
+        ),
+        "counts": {
+            "face_below": int(face_below.sum()),
+            "face_sides": int(face_sides.sum()),
+            "nasion_strip_kept": int(nasion_strip.sum()),
+            "all": int(mask.sum()),
+        },
+    }
+    return mask, info
