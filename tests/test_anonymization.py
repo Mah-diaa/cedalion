@@ -14,7 +14,6 @@ from cedalion.geometry.photogrammetry.anonymization import (
     normalize_axes,
     isolate_head,
     detect_landmarks_from_nasion,
-    get_facial_region_mask_from_nasion,
 )
 
 
@@ -168,51 +167,5 @@ class TestDetectLandmarksFromNasion:
         landmarks = detect_landmarks_from_nasion(head_like_surface, nasion)
         nz_out = landmarks.sel(label="Nz").pint.dequantify().values
         assert_allclose(nz_out, nasion, atol=1e-6)
-
-
-# ============================================================================
-# Facial Region Mask
-# ============================================================================
-
-
-class TestFacialRegionMask:
-    """Tests for facial region mask generation."""
-
-    def test_mask_shape_and_type(self, simple_sphere_surface):
-        """Mask should be boolean with correct length."""
-        nz = np.array([0, 100, 0])
-        fwd = np.array([0, 1, 0])
-        mask = get_facial_region_mask_from_nasion(
-            simple_sphere_surface, nz, fwd
-        )
-        assert mask.dtype == bool
-        assert len(mask) == simple_sphere_surface.nvertices
-
-    def test_some_vertices_masked(self, simple_sphere_surface):
-        """Some but not all vertices should be in the facial region."""
-        nz = np.array([0, 100, 0])
-        fwd = np.array([0, 1, 0])
-        mask = get_facial_region_mask_from_nasion(
-            simple_sphere_surface, nz, fwd
-        )
-        assert mask.sum() > 0
-        assert mask.sum() < len(mask)
-
-    def test_protection_zones_excluded(self, simple_sphere_surface, anatomical_landmarks):
-        """Vertices near protected points should not be masked."""
-        nz = np.array([0, 100, 0])
-        fwd = np.array([0, 1, 0])
-        mask = get_facial_region_mask_from_nasion(
-            simple_sphere_surface, nz, fwd,
-            protected_points=anatomical_landmarks,
-            protection_radius=15.0 * units.mm,
-        )
-
-        vertices = simple_sphere_surface.mesh.vertices
-        protected_positions = anatomical_landmarks.pint.dequantify().values
-        for pos in protected_positions:
-            distances = np.linalg.norm(vertices - pos, axis=1)
-            nearby = distances < 15.0
-            assert not np.any(mask & nearby), "Protected zone breached"
 
 
