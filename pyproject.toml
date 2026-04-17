@@ -59,10 +59,6 @@ dependencies = [
   "pyxdf==1.17.0",
 ]
 
-[project.optional-dependencies]
-anonymization = ["mediapipe==0.10.*"]
-
-
 [project.urls]
 Home = "https://ibs-lab.com/cedalion/"
 Documentation = "https://doc.ibs.tu-berlin.de/cedalion/doc/dev/"

@@ -15,7 +15,6 @@ from cedalion.geometry.photogrammetry.anonymization import (
     isolate_head,
     detect_landmarks_from_nasion,
     get_facial_region_mask_from_nasion,
-    detect_nasion_auto,
 )
 
 
@@ -217,15 +216,3 @@ class TestFacialRegionMask:
             assert not np.any(mask & nearby), "Protected zone breached"
 
 
-# ============================================================================
-# Auto Nasion Detection
-# ============================================================================
-
-
-class TestDetectNasionAuto:
-    """Tests for automatic nasion detection."""
-
-    def test_returns_none_on_featureless_mesh(self, simple_sphere_surface):
-        """A featureless sphere has no face — should return None."""
-        result = detect_nasion_auto(simple_sphere_surface)
-        assert result is None

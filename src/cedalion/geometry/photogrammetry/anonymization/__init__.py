@@ -7,21 +7,25 @@ scientific utility.
 
 The pipeline works as follows:
 
-1. Detect nasion automatically (or via manual click)
+1. User clicks the nasion (Nz) via ``pick_nasion``
 2. Normalize axes so Y=anterior, Z=left
 3. Isolate the head (remove body/shoulders)
 4. Detect remaining landmarks (Iz, Cz, LPA, RPA) from nasion
-5. Generate facial region mask (MediaPipe contour or hemisphere fallback)
-6. Delete facial vertices
+5. Align the frame from the 5 landmarks and detect the cap boundary
+6. Build the face + ear deletion mask from the landmarks
+7. Delete the masked vertices
+
+An alternative MediaPipe-based automatic pipeline lives on the
+``auto-detection-pipeline`` branch.
 
 Example:
     >>> from cedalion.geometry.photogrammetry.anonymization import (
-    ...     detect_nasion_auto, pick_nasion, normalize_axes,
-    ...     isolate_head, detect_landmarks_from_nasion,
-    ...     get_facial_region_mask_from_nasion,
+    ...     pick_nasion, normalize_axes, isolate_head,
+    ...     detect_landmarks_from_nasion, align_axes_from_landmarks,
+    ...     detect_cap_boundary, face_mask_from_landmarks,
+    ...     delete_masked_vertices,
     ... )
-    >>> auto = detect_nasion_auto(surface)
-    >>> nasion, meta = auto if auto else (pick_nasion(surface), {})
+    >>> nasion = pick_nasion(surface)
     >>> surface, nasion, R = normalize_axes(surface, nasion)
     >>> surface, _ = isolate_head(surface, nasion)
     >>> landmarks = detect_landmarks_from_nasion(surface, nasion)
@@ -40,14 +44,12 @@ from .face_detector import (
     face_mask_from_landmarks,
     delete_masked_vertices,
 )
-from .nasion_detector import detect_nasion_auto
 from .ui import pick_nasion
 from .validator import validate_anonymization
 
 
 __all__ = [
     # Nasion detection
-    "detect_nasion_auto",
     "pick_nasion",
     # Axis normalization and head isolation
     "normalize_axes",

@@ -1,10 +1,14 @@
 """Facial region detection for photogrammetry scans.
 
 Provides axis normalization, head isolation, landmark detection from a
-user-provided nasion (Nz), and facial region mask generation. Supports both
-a MediaPipe contour path (via ``get_facial_region_mask_from_nasion``) and a
-pure-geometric landmark-only path (``align_axes_from_landmarks`` +
+user-provided nasion (Nz), and facial region mask generation. Uses a
+pure-geometric landmark-only pipeline (``align_axes_from_landmarks`` +
 ``detect_cap_boundary`` + ``face_mask_from_landmarks``).
+
+``get_facial_region_mask_from_nasion`` also accepts an optional face-oval
+contour from an external detector, but the contour input is not used on this
+branch. The MediaPipe-based automatic pipeline lives on the
+``auto-detection-pipeline`` branch.
 
 Initial Contributors:
     - Face Anonymization Project | 2024
