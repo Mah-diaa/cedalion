@@ -44,6 +44,7 @@ from .mask import (
     detect_cap_boundary,
     face_mask_from_landmarks,
     delete_masked_vertices,
+    save_anonymized_scan,
 )
 from .validator import validate_anonymization
 
@@ -59,6 +60,7 @@ __all__ = [
     "detect_cap_boundary",
     "face_mask_from_landmarks",
     "delete_masked_vertices",
+    "save_anonymized_scan",
     # Validation
     "validate_anonymization",
 ]

@@ -22,6 +22,50 @@ import cedalion.typing as cdt
 logger = logging.getLogger("cedalion")
 
 
+def _copy_visual(src_mesh, dst_mesh, vertex_index=None) -> None:
+    """Copy a trimesh ``visual`` onto ``dst_mesh``, optionally reindexing.
+
+    Assigning a ``TextureVisuals`` directly across meshes (e.g. by passing
+    ``visual=old.visual`` to a new ``Trimesh(...)``) often silently downgrades
+    it to ``ColorVisuals`` because the visual holds a back-reference to its
+    original mesh and re-checks ``len(uv) == len(mesh.vertices)`` against the
+    wrong target. Rebuilding the visual explicitly avoids that.
+
+    Args:
+        src_mesh: Source trimesh.
+        dst_mesh: Destination trimesh (mutated in place).
+        vertex_index: Optional indices into the source vertex array. If given,
+            UVs / vertex_colors are sliced by this index before being attached.
+            Leave None when the vertex count is unchanged.
+    """
+    import trimesh
+
+    src_visual = src_mesh.visual
+    uv = getattr(src_visual, "uv", None)
+    image = getattr(src_visual, "image", None)
+    n_src = len(src_mesh.vertices)
+
+    if uv is not None and len(uv) == n_src:
+        uv_arr = np.asarray(uv)
+        if vertex_index is not None:
+            uv_arr = uv_arr[vertex_index]
+        if image is None:
+            mat = getattr(src_visual, "material", None)
+            image = getattr(mat, "image", None) if mat is not None else None
+        dst_mesh.visual = trimesh.visual.TextureVisuals(
+            uv=uv_arr,
+            image=image,
+        )
+        return
+
+    vcol = getattr(src_visual, "vertex_colors", None)
+    if vcol is not None and len(vcol) == n_src:
+        vcol_arr = np.asarray(vcol)
+        if vertex_index is not None:
+            vcol_arr = vcol_arr[vertex_index]
+        dst_mesh.visual.vertex_colors = vcol_arr
+
+
 def normalize_axes(
     surface: cdc.TrimeshSurface,
     nasion: np.ndarray,
@@ -74,9 +118,9 @@ def normalize_axes(
     new_mesh = trimesh.Trimesh(
         vertices=rotated_verts,
         faces=surface.mesh.faces,
-        visual=surface.mesh.visual,
         process=False,
     )
+    _copy_visual(surface.mesh, new_mesh)
     rotated_surface = cdc.TrimeshSurface(new_mesh, crs=surface.crs, units=surface.units)
 
     rotated_nasion = R @ nasion
@@ -204,12 +248,7 @@ def isolate_head(
         faces=new_faces,
         process=False,
     )
-    try:
-        old_visual = surface.mesh.visual
-        if hasattr(old_visual, "vertex_colors") and len(old_visual.vertex_colors) == len(vertices):
-            new_mesh.visual.vertex_colors = old_visual.vertex_colors[kept_verts]
-    except Exception:
-        pass
+    _copy_visual(surface.mesh, new_mesh, vertex_index=kept_verts)
 
     head_surface = cdc.TrimeshSurface(
         new_mesh, crs=surface.crs, units=surface.units
@@ -289,9 +328,9 @@ def align_axes_from_landmarks(
     new_mesh = trimesh.Trimesh(
         vertices=aligned_verts,
         faces=surface.mesh.faces,
-        visual=surface.mesh.visual,
         process=False,
     )
+    _copy_visual(surface.mesh, new_mesh)
     aligned_surface = cdc.TrimeshSurface(
         new_mesh, crs=surface.crs, units=surface.units,
     )
