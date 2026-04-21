@@ -14,6 +14,13 @@ The pipeline works as follows:
 4. Align the full frame from the 5 landmarks (``preprocessing``).
 5. Detect the cap boundary, build the deletion mask, and delete the masked
    vertices (``mask``).
+6. Optionally revert the aligned surface and landmarks back to the raw
+   Einstar frame via ``revert_to_einstar_frame`` so the saved files carry
+   ``crs="digitized"`` and match the co-registration tutorial's input
+   convention (``read_einstar_obj`` output).
+7. Save the anonymized mesh (``.obj``) and the landmarks (``.tsv``) via
+   ``save_anonymized_scan(surface, out_path, landmarks=...)``. The TSV is
+   what the co-registration tutorial loads at step 5.2.
 
 ``detect_landmarks_from_nasion`` (``landmarks``) is an alternative that takes
 just the nasion and geometrically infers the other four. An alternative
@@ -38,6 +45,7 @@ from .preprocessing import (
     normalize_axes,
     isolate_head,
     align_axes_from_landmarks,
+    revert_to_einstar_frame,
 )
 from .landmarks import detect_landmarks_from_nasion
 from .mask import (
@@ -50,10 +58,12 @@ from .validator import validate_anonymization
 
 
 __all__ = [
-    # Preprocessing (axis normalization, head isolation, full alignment)
+    # Preprocessing (axis normalization, head isolation, full alignment,
+    # and the inverse mapping back to the raw Einstar frame)
     "normalize_axes",
     "isolate_head",
     "align_axes_from_landmarks",
+    "revert_to_einstar_frame",
     # Landmark detection
     "detect_landmarks_from_nasion",
     # Mask construction and application

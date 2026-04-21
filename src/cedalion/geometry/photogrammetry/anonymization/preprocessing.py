@@ -3,10 +3,12 @@
 Gets a raw Einstar photogrammetry scan into a canonical frame suitable for
 landmark detection and mask building:
 
-- ``normalize_axes`` rotates around X so Y points anterior.
+- ``normalize_axes`` rotates around X so Y points anterior (preliminary,
+  used before head isolation).
 - ``isolate_head`` strips body/shoulders/chair and disconnected fragments.
-- ``align_axes_from_landmarks`` derives a full rotation from the 5 anatomical
-  landmarks once they are available.
+- ``align_axes_from_landmarks`` maps the scan into the CTF frame
+  (+X=anterior, +Y=left, +Z=up, origin at the LPA-RPA midpoint) once all 5
+  landmarks are available.
 
 Initial Contributors:
     - Face Anonymization Project | 2024
@@ -268,16 +270,16 @@ def align_axes_from_landmarks(
     surface: cdc.TrimeshSurface,
     landmarks: cdt.LabeledPointCloud,
 ) -> tuple[cdc.TrimeshSurface, cdt.LabeledPointCloud, np.ndarray]:
-    """Derive full rotation from 5 landmarks and apply to mesh and landmarks.
+    """Map mesh + landmarks into the CTF anatomical frame.
 
-    ``normalize_axes()`` only rotates around X. This function uses the full 5
-    landmark set to align the head to the canonical frame:
+    CTF convention:
 
-        Z = lateral (Lpa - Rpa, pointing left)
-        Y = anterior (Nz - ear_mid, orthogonal to Z)
-        X = up (cross(Y, Z))
+        +X = anterior (toward Nz)
+        +Y = left (toward Lpa)
+        +Z = up (toward Cz)
+        origin = midpoint of Lpa and Rpa (interaural midpoint)
 
-    Sign checks ensure Cz points +X and Nz points +Y.
+    The returned surface and landmarks carry ``crs="ctf"``.
 
     Args:
         surface: Axis-normalized TrimeshSurface (post ``normalize_axes`` and
@@ -286,9 +288,9 @@ def align_axes_from_landmarks(
             (matching the surface frame).
 
     Returns:
-        Tuple of (aligned_surface, aligned_landmarks, rotation_matrix).
-        ``rotation_matrix`` is 3x3 and maps input-frame vectors to the aligned
-        frame (apply as ``v @ R.T``).
+        Tuple of (aligned_surface, aligned_landmarks, transform).
+        ``transform`` is a 4x4 homogeneous affine that maps input-frame
+        points into CTF; apply as ``hom = transform @ [x, y, z, 1]``.
     """
     import trimesh
 
@@ -305,26 +307,29 @@ def align_axes_from_landmarks(
     Cz = lm[idx["Cz"]]
     Lpa = lm[idx["Lpa"]]
     Rpa = lm[idx["Rpa"]]
-    ear_mid = 0.5 * (Lpa + Rpa)
+    origin = 0.5 * (Lpa + Rpa)
 
-    z_ax = Lpa - Rpa
-    z_ax = z_ax / np.linalg.norm(z_ax)
+    y_ax = Lpa - Rpa
+    y_ax = y_ax / np.linalg.norm(y_ax)
 
-    nz_dir = Nz - ear_mid
-    nz_dir = nz_dir - np.dot(nz_dir, z_ax) * z_ax
-    y_ax = nz_dir / np.linalg.norm(nz_dir)
+    nz_dir = Nz - origin
+    nz_dir = nz_dir - np.dot(nz_dir, y_ax) * y_ax
+    x_ax = nz_dir / np.linalg.norm(nz_dir)
 
-    x_ax = np.cross(y_ax, z_ax)
-
-    if np.dot(Cz - ear_mid, x_ax) < 0:
-        x_ax = -x_ax
-    if np.dot(Nz - ear_mid, y_ax) < 0:
-        y_ax = -y_ax
     z_ax = np.cross(x_ax, y_ax)
 
-    R = np.vstack([x_ax, y_ax, z_ax])
+    if np.dot(Cz - origin, z_ax) < 0:
+        z_ax = -z_ax
+    if np.dot(Nz - origin, x_ax) < 0:
+        x_ax = -x_ax
+    y_ax = np.cross(z_ax, x_ax)
 
-    aligned_verts = np.asarray(surface.mesh.vertices) @ R.T
+    R = np.vstack([x_ax, y_ax, z_ax])
+    M = np.eye(4)
+    M[:3, :3] = R
+    M[:3, 3] = -R @ origin
+
+    aligned_verts = (np.asarray(surface.mesh.vertices) - origin) @ R.T
     new_mesh = trimesh.Trimesh(
         vertices=aligned_verts,
         faces=surface.mesh.faces,
@@ -332,10 +337,80 @@ def align_axes_from_landmarks(
     )
     _copy_visual(surface.mesh, new_mesh)
     aligned_surface = cdc.TrimeshSurface(
-        new_mesh, crs=surface.crs, units=surface.units,
+        new_mesh, crs="ctf", units=surface.units,
     )
 
-    aligned_lm = lm @ R.T
-    aligned_landmarks = landmarks.pint.dequantify().copy(data=aligned_lm).pint.quantify()
+    aligned_lm = (lm - origin) @ R.T
+    old_crs_dim = [d for d in landmarks.dims if d != "label"][0]
+    aligned_landmarks = (
+        landmarks.pint.dequantify()
+        .copy(data=aligned_lm)
+        .rename({old_crs_dim: "ctf"})
+        .pint.quantify()
+    )
 
-    return aligned_surface, aligned_landmarks, R
+    return aligned_surface, aligned_landmarks, M
+
+
+def revert_to_einstar_frame(
+    surface: cdc.TrimeshSurface,
+    landmarks: cdt.LabeledPointCloud,
+    R_normalize: np.ndarray,
+    M_align: np.ndarray,
+) -> tuple[cdc.TrimeshSurface, cdt.LabeledPointCloud]:
+    """Map an aligned surface and landmarks back into the raw Einstar frame.
+
+    Inverse of the ``normalize_axes`` then ``align_axes_from_landmarks``
+    composition, so the returned mesh and landmarks carry ``crs="digitized"``
+    and match the coordinates of the original ``read_einstar_obj`` output.
+    Useful right before ``save_anonymized_scan`` when the downstream
+    co-registration pipeline expects the saved ``.obj`` and ``.tsv`` in the
+    native scanner frame (e.g. Elsa's tutorial step 5.2 workflow, whose
+    example files carry ``crs=digitized``).
+
+    Note that ``isolate_head`` is not invertible: the returned mesh is still
+    head-only even though its coordinates are in the original digitized frame.
+
+    Args:
+        surface: TrimeshSurface in the CTF frame (post
+            ``align_axes_from_landmarks``, optionally after masking).
+        landmarks: LabeledPointCloud in the CTF frame.
+        R_normalize: 3x3 rotation returned by ``normalize_axes``.
+        M_align: 4x4 affine returned by ``align_axes_from_landmarks``.
+
+    Returns:
+        Tuple of (surface_digitized, landmarks_digitized). Both carry
+        ``crs="digitized"`` and the mesh preserves UVs / vertex colors.
+    """
+    import trimesh
+
+    M_inv = np.linalg.inv(M_align)
+    R_inv = R_normalize.T
+
+    ctf_verts = np.asarray(surface.mesh.vertices)
+    norm_verts = ctf_verts @ M_inv[:3, :3].T + M_inv[:3, 3]
+    raw_verts = norm_verts @ R_inv.T
+
+    new_mesh = trimesh.Trimesh(
+        vertices=raw_verts,
+        faces=surface.mesh.faces,
+        process=False,
+    )
+    _copy_visual(surface.mesh, new_mesh)
+    raw_surface = cdc.TrimeshSurface(
+        new_mesh, crs="digitized", units=surface.units,
+    )
+
+    lm_ctf = landmarks.pint.dequantify().values
+    lm_norm = lm_ctf @ M_inv[:3, :3].T + M_inv[:3, 3]
+    lm_raw = lm_norm @ R_inv.T
+
+    old_crs_dim = [d for d in landmarks.dims if d != "label"][0]
+    raw_landmarks = (
+        landmarks.pint.dequantify()
+        .copy(data=lm_raw)
+        .rename({old_crs_dim: "digitized"})
+        .pint.quantify()
+    )
+
+    return raw_surface, raw_landmarks
