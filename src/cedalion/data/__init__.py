@@ -62,7 +62,7 @@ DATASETS = pooch.create(
 
         "spafNIRS_example_sub179.zip" : "sha256:0a247be5bfa3c7b5bc12d19203e2bd5432df964d72646945891601d0ba944141", # noqa:E501
 
-        "hm_colin27.zip" : "sha256:18aca100e65fea3b444509ed41fcee4c58eded4907f8538bb4d699450b7a54ad", # noqa:E501
+        "hm_colin27.zip" : "sha256:817495e1ef0dc8edcb4f52a0668f3ec1df772bb1efa66dd3eec01acb03ffad47", # noqa:E501
         "hm_icbm152.zip" : "sha256:6e82b9a707a9b36d6b1137fddd296dadff7447f55c3b4fbcb73dbcb2c15ffec0", # noqa:E501
         "fs_reconall_colin27.zip" : "sha256:988b74efddb7cc2551dced25d8cbee89e8b32f1d8e1f07d84796e59db6b5f736", # noqa:E501
         "fs_reconall_icbm152.zip" : "sha256:c8d7ae1923724d15074a03155920b4a817b8054f38cf6f5f37b4f37b26dbdfb6", # noqa:E501
