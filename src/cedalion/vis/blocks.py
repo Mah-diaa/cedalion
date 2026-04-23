@@ -365,7 +365,11 @@ def plot_labeled_points(
     # Iterate through each point and its corresponding label
     for i_point, point in enumerate(points):
         # Determine the point type
-        point_type = point.coords['type'].item()
+        if 'type' in point.coords:
+            point_type = point.coords['type'].item()
+        else:
+            point_type = PointType.UNKNOWN
+
         # Create and add a sphere at the point's coordinates
         s = pv.Sphere(radius=default_point_sizes[point_type], center=point.values)
         plotter.add_mesh(
