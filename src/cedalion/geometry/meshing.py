@@ -147,6 +147,7 @@ def parcel_aware_voxels_to_vertices_map(
         if parcel in skip_parcels:
             continue
 
+        # mask of a all vertices with this parcel label
         surf_vertices_mask = surf_vertices.parcel.values == parcel
 
         # build a tree with vertices of only this parcel
@@ -162,7 +163,10 @@ def parcel_aware_voxels_to_vertices_map(
         # translate indices to indices of surface vertices
         vertex_indices = surf_vertices_indices_all[surf_vertices_mask][vertex_indices]
 
+        # number of vertices mapped to voxels
         nvertices_mapped = len(set(vertex_indices))
+
+        # number of vertices with the current parcel label
         nvertices_parcel = np.sum(surf_vertices_mask)
 
         voxel2vertex_indices.loc[parcel_cell_coords.label] = vertex_indices
@@ -180,15 +184,34 @@ def parcel_aware_voxels_to_vertices_map(
             ]
 
             print(
-                f"stealing {len(unassigned_vertex_indices)} voxels for parcel {parcel}"
+                f"parcel {parcel}: {nvertices_mapped}/{nvertices_parcel} verts mapped. "
+                f"reassign {len(unassigned_vertex_indices)} voxel(s) to verts "
+                "without voxels."
             )
 
+            # array of only those voxels belonging to this parcel
+            current_v2v = voxel2vertex_indices[parcel_cell_coords.label.values]
+
+            # don't reassign voxels from vertices that only have a single one
+            unique_assigned_vidx, unique_vertex_voxel_counts = np.unique(
+                current_v2v,
+                return_counts=True,
+            )
+            vidx_with_only_one_voxel = unique_assigned_vidx[
+                unique_vertex_voxel_counts == 1
+            ]
+            # flag those voxels that should not be reassigned
+            keep_mask = np.isin(current_v2v, vidx_with_only_one_voxel)
+
             # distance between all unassigned vertices and all voxels in this parcel
+            # shape (len(unassigned_vertex_positions), len(arcel_cell_coords))
             dists = scipy.spatial.distance.cdist(
                 unassigned_vertex_positions,
                 parcel_cell_coords.values,
                 metric="euclidean",
             )
+            dists[:, keep_mask] += 1000 # increase distance to make them unattractive
+
             # each vertex without voxel gets the closest voxel assigned
             i_vertices, i_voxels = scipy.optimize.linear_sum_assignment(dists)
 
@@ -196,6 +219,16 @@ def parcel_aware_voxels_to_vertices_map(
                 unassigned_vertex_indices
             )
 
+            # afterwards all vertices of this parcel should be mapped to a voxel
+
+            nvertices_mapped_after = len(
+                set(voxel2vertex_indices[parcel_cell_coords.label.values].values)
+            )
+            if nvertices_mapped_after != nvertices_parcel:
+                raise RuntimeError(
+                    "Even after voxel stealing there are still "
+                    "not all vertices assigned."
+                )
 
     voxel_count = np.zeros(surface.nvertices)
     for k, v in Counter(voxel2vertex_indices.values).items():

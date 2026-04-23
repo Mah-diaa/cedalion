@@ -13,6 +13,7 @@ import scipy.sparse
 import trimesh
 import xarray as xr
 from scipy.spatial import KDTree
+import gzip
 
 import cedalion
 import cedalion.data
@@ -332,9 +333,8 @@ class TwoSurfaceHeadModel:
         )
 
         if voxel_to_vertex_mapping_file_brain is not None:
-            voxel_to_vertex_brain = scipy.sparse.load_npz(
-                voxel_to_vertex_mapping_file_brain
-            )
+            with gzip.GzipFile(voxel_to_vertex_mapping_file_brain) as fin:
+                voxel_to_vertex_brain = scipy.io.mmread(fin)
         else:
             voxel_to_vertex_brain = map_segmentation_mask_to_surface(
                 brain_mask, t_ijk2ras, brain_ijk.apply_transform(t_ijk2ras)
@@ -740,3 +740,22 @@ def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
 
     return head_ijk
 
+
+@lru_cache
+def get_inflated_cortex_surface(model : str) -> cdc.TrimeshSurface:
+    AVAILABLE_MODELS = ["colin27", "icbm152"]
+
+    if model == "colin27":
+        f = cedalion.data.get_colin27_headmodel_files()
+    elif model == "icbm152":
+        f = cedalion.data.get_icbm152_headmodel_files()
+    else:
+        raise ValueError(
+            "Unknown head model. Available models are: " + ", ".join(AVAILABLE_MODELS)
+        )
+
+    return cdc.TrimeshSurface(
+        trimesh.load(f.basedir / "cortex_pial_inflated.obj"),
+        crs="inflated",
+        units=cedalion.units(None).units,
+    )
