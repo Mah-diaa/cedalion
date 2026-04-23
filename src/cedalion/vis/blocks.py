@@ -211,9 +211,14 @@ def plot_surface(
 
     if "pickable" not in kwargs:
         kwargs["pickable"] = True
+    if "smooth_shading" not in kwargs:
+        kwargs["smooth_shading"] = True
+    if "split_sharp_edges" not in kwargs:
+        kwargs["split_sharp_edges"] = True
+    if "feature_angle" not in kwargs:
+        kwargs["feature_angle"] = 50
 
-    plotter.add_mesh(mesh, color=color, rgb=rgb, opacity=opacity, smooth_shading=True,
-                     **kwargs)
+    plotter.add_mesh(mesh, color=color, rgb=rgb, opacity=opacity, **kwargs)
 
 
     # Define landmark labels
