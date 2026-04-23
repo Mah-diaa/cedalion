@@ -373,7 +373,8 @@ class TwoSurfaceHeadModel:
             f"units: {self.brain.units}\n"
             f"  scalp faces: {self.scalp.nfaces} vertices: {self.scalp.nvertices} "
             f"units: {self.scalp.units}\n"
-            f"  landmarks: {len(self.landmarks)}\n"
+            "  landmarks: "
+            f"{len(self.landmarks) if self.landmarks is not None else 'None'}\n"
             ")"
         )
 
