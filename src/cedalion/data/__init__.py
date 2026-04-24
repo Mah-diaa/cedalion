@@ -33,7 +33,7 @@ DATASETS = pooch.create(
         "fingertappingDOT.zip": "sha256:03e620479bd48aea8457050b7ce42e0c73ef5448296272448b54cee0e883853e",  # noqa: E501
         "multisubject-fingertapping.zip": "sha256:9949c46ed676e52c385b4c09e3a732f6e742bf745253f4b4208ba678f9a0709b",  # noqa: E501
         "nn22_resting_state.zip": "sha256:0394347af172d906fe33403e84303435af26d82fdcf1d36dad5c7b05beb82d88",  # noqa:E501
-        "snirf2bids_example_dataset.zip": "f14508e332c7d259c13b9717ac3c490ab2cabfd7b30fdf97b347d5ba59b783d1",  # noqa:E501
+        "snirf2bids_example_dataset.zip": "sha256:f14508e332c7d259c13b9717ac3c490ab2cabfd7b30fdf97b347d5ba59b783d1",  # noqa:E501
         "spafNIRS_example_sub179.zip": "sha256:0a247be5bfa3c7b5bc12d19203e2bd5432df964d72646945891601d0ba944141",  # noqa:E501
 
         # head models
