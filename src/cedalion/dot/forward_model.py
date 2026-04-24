@@ -876,7 +876,7 @@ def unstack_flat_vertex(array: xr.DataArray):
 
 
 def stack_flat_channel(array: xr.DataArray):
-    """Stack ``wavelength`` and ``channel`` dimensions into a single ``flat_channel`` dim.
+    """Stack ``wavelength`` and ``channel`` dims into a single ``flat_channel`` dim.
 
     Args:
         array: DataArray with ``"wavelength"`` and ``"channel"`` dimensions.
@@ -935,10 +935,9 @@ def image_to_channel_space(
         ValueError: If ``img`` has incompatible units or ``spectrum`` is ``None``
             when concentration units are detected.
     """
-    common_dim = set(Adot.dims) & set (img.dims)
-    assert len(common_dim) == 1
-    common_dim = next(iter(common_dim))
-    assert common_dim == "vertex" # FIXME generalize?
+
+    common_dim = "vertex"
+    assert (common_dim in Adot.dims) and (common_dim in img.dims)
 
     if xrutils.check_units(img, "[concentration]"):
         if spectrum is None:
@@ -955,10 +954,10 @@ def image_to_channel_space(
                 Adot_stacked, img_stacked, dim="flat_vertex"
             )  # FIXME generalize?
         )
-    elif xrutils.check_units(img, "[1/length]"):
+    elif xrutils.check_units(img, "1/[length]"):
         Adot = Adot.pint.quantify()
         img = img.pint.quantify()
 
-        xrutils.contract(Adot_stacked, img_stacked, dim=common_dim)
+        return xrutils.contract(Adot, img, dim=common_dim)
     else:
         raise ValueError("img must be a quantified concentration ")
