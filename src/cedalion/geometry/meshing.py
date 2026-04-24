@@ -1,3 +1,5 @@
+"""Mesh decimation, voxel-to-vertex mapping, and scalar upscaling utilities."""
+
 from collections import Counter
 
 import numpy as np
@@ -15,10 +17,22 @@ def upscale_scalars(
     lowres_mesh: cdc.TrimeshSurface,
     lowres_scalars: np.ndarray,
 ):
-    """Upscale a scalar function on a low-resolution mesh to a higher-resolution.
+    """Upscale a scalar function from a low-resolution mesh to a higher-resolution one.
 
-    Operates on a triangulated surface mesh at two resolutions, where the low-res. mesh
-    is a subset of the high-res mesh.
+    Uses barycentric interpolation: for each high-res vertex, the closest point on the
+    low-res mesh is found and the scalar value is interpolated from the enclosing face's
+    three vertices.  The low-res mesh must be a spatial subset of the high-res mesh
+    (e.g. produced by :func:`decimate_mesh`).
+
+    Args:
+        highres_mesh: Target surface at higher resolution.
+        lowres_mesh: Source surface at lower resolution.
+        lowres_scalars: Scalar values defined at each vertex of ``lowres_mesh``,
+            shape ``(n_lowres_vertices,)``.
+
+    Returns:
+        NumPy array of scalar values interpolated onto ``highres_mesh`` vertices,
+        shape ``(n_highres_vertices,)``.
     """
 
     # For each high-res vertex, find the closest point on the low-res mesh
@@ -45,7 +59,28 @@ def decimate_mesh(
     selected=False,
     selection_threshold=0.5,
 ):
+    """Decimate a triangulated surface mesh to a target vertex count.
 
+    Uses PyMeshLab's quadric edge collapse algorithm.  When ``vertex_quality``
+    is provided, it is used as a per-vertex quality scalar to guide the
+    decimation.  Optionally, only vertices below a quality threshold are
+    decimated when ``selected=True``.
+
+    Args:
+        surface: Input :class:`~cedalion.dataclasses.TrimeshSurface`.
+        nvertex_target: Desired number of vertices in the output mesh.
+        vertex_quality: Optional per-vertex quality scalar array of shape
+            ``(n_vertices,)`` used to weight the decimation.
+        selected: If ``True``, only decimate vertices whose quality is below
+            ``selection_threshold``.
+        selection_threshold: Quality threshold for vertex selection when
+            ``selected=True``.
+
+    Returns:
+        New :class:`~cedalion.dataclasses.TrimeshSurface` with approximately
+        ``nvertex_target`` vertices.  Per-vertex coordinates stored in
+        ``surface.vertex_coords`` are transferred via nearest-neighbour lookup.
+    """
     if vertex_quality is not None:
         mm_before = pymeshlab.Mesh(
             surface.mesh.vertices, surface.mesh.faces, v_scalar_array=vertex_quality
@@ -98,6 +133,23 @@ def decimate_mesh(
 
 
 def map_voxels_to_vertices(surface: cdc.TrimeshSurface, cell_coords):
+    """Map voxel centres to their nearest surface vertex.
+
+    Projects each voxel coordinate onto the surface mesh and then finds the
+    nearest vertex.  Processed in chunks to limit memory use.
+
+    Args:
+        surface: Target :class:`~cedalion.dataclasses.TrimeshSurface`.
+        cell_coords: Array of voxel-centre coordinates, shape ``(N, 3)``.
+
+    Returns:
+        Tuple ``(voxel2vertex_indices, voxel_count)``:
+
+        - **voxel2vertex_indices** (np.ndarray[int], shape ``(N,)``): index of the
+          nearest vertex for each voxel.
+        - **voxel_count** (np.ndarray[int], shape ``(n_vertices,)``): number of
+          voxels mapped to each vertex.
+    """
     chunk_size = 20000
     voxel2vertex_indices = []
     pq = trimesh.proximity.ProximityQuery(surface.mesh)
@@ -130,6 +182,30 @@ def parcel_aware_voxels_to_vertices_map(
     ),
     voxel_stealing=False,
 ):
+    """Map voxel centres to surface vertices respecting parcel boundaries.
+
+    Each voxel is mapped only to vertices within the same cortical parcel,
+    preventing leakage across parcel boundaries.  Optionally, vertices that
+    would otherwise receive no voxel can "steal" the nearest voxel from a
+    neighbouring vertex (``voxel_stealing``).
+
+    Args:
+        surface: Target :class:`~cedalion.dataclasses.TrimeshSurface` whose
+            vertices carry a ``"parcel"`` coordinate.
+        cell_coords: xr.DataArray of voxel-centre coordinates with a
+            ``"parcel"`` coordinate that groups voxels by parcel.
+        skip_parcels: Parcel labels to ignore (typically medial-wall parcels).
+        voxel_stealing: If ``True``, reassign voxels to ensure every parcel
+            vertex gets at least one voxel via linear assignment.
+
+    Returns:
+        Tuple ``(voxel2vertex_indices, voxel_count)``:
+
+        - **voxel2vertex_indices** (xr.DataArray[int]): nearest vertex index for
+          each voxel (``-1`` for skipped parcels).
+        - **voxel_count** (np.ndarray[int], shape ``(n_vertices,)``): number of
+          voxels mapped to each vertex.
+    """
     voxel2vertex_indices = xr.DataArray(
         np.ones(len(cell_coords), dtype=int) * -1,
         dims="label",

@@ -26,6 +26,11 @@ class DesignMatrix:
 
     @property
     def regressors(self):
+        """List of all regressor names in this design matrix (common + channel-wise).
+
+        Returns:
+            List of regressor name strings in order: common first, then channel-wise.
+        """
         result = []
         if self.common is not None:
             result.extend([str(r) for r in self.common.regressor.values])
@@ -37,6 +42,7 @@ class DesignMatrix:
         return result
 
     def __repr__(self):
+        """Return a compact string representation listing common and channel-wise regressors."""
         cregs = (
             ",".join([f"'{r}'" for r in self.common.regressor.values])
             if self.common is not None
@@ -49,6 +55,20 @@ class DesignMatrix:
 
 
     def __and__(self, other: DesignMatrix):
+        """Concatenate two design matrices (``dm1 & dm2``).
+
+        Merges common regressors by concatenating along the ``"regressor"``
+        dimension and appends the channel-wise regressor lists.
+
+        Args:
+            other: Design matrix to append to this one.
+
+        Returns:
+            New :class:`DesignMatrix` combining both inputs.
+
+        Raises:
+            ValueError: If the two matrices share any regressor name.
+        """
         our_regressors = set(self.regressors)
         for reg in other.regressors:
             if reg in our_regressors:

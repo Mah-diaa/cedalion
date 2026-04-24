@@ -21,6 +21,21 @@ import cedalion.math.ar_irls
 
 
 def _channel_fit(y, x, noise_model="ols", ar_order=30):
+    """Fit a single channel's time series with the specified linear noise model.
+
+    Args:
+        y: Dependent variable (pandas Series or 1-D array).
+        x: Design matrix (pandas DataFrame or 2-D array).
+        noise_model: Regression model to use.  One of ``"ols"``, ``"rls"``,
+            ``"wls"``, ``"ar_irls"``, ``"gls"``, ``"glsar"``.
+        ar_order: AR model order used by ``"ar_irls"`` and ``"glsar"``.
+
+    Returns:
+        Fitted statsmodels regression result object.
+
+    Raises:
+        ValueError: If ``noise_model`` is not one of the supported options.
+    """
     available_models = ["ols", "rls", "wls", "ar_irls", "gls", "glsar"]
 
     if noise_model not in available_models:
