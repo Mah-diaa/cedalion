@@ -11,7 +11,6 @@ directory.
 from __future__ import annotations
 import logging
 import os.path
-import warnings
 import sys
 from pathlib import Path
 from warnings import warn
@@ -486,7 +485,7 @@ class ForwardModel:
                 f_s = fluence_file.get_fluence(r.source, r.wavelength)
                 f_d = fluence_file.get_fluence(r.detector, r.wavelength)
 
-                pertubation = (f_s * f_d).flatten()
+                pertubation = (f_s * f_d).flatten() # shape (nvoxel,)
 
                 normfactor = (
                     fluence_at_optodes.loc[r.source, r.detector, r.wavelength].values
@@ -496,12 +495,20 @@ class ForwardModel:
                 i_wl = wavelengths.index(r.wavelength)
                 i_ch = channels.index(r.channel)
 
-                Adot_brain[i_ch, :, i_wl] = (
-                    pertubation @ self.head_model.voxel_to_vertex_brain / normfactor
-                )
-                Adot_scalp[i_ch, :, i_wl] = (
-                    pertubation @ self.head_model.voxel_to_vertex_scalp / normfactor
-                )
+                if normfactor > 0:
+                    Adot_brain[i_ch, :, i_wl] = (
+                        pertubation @ self.head_model.voxel_to_vertex_brain / normfactor
+                    )
+                    Adot_scalp[i_ch, :, i_wl] = (
+                        pertubation @ self.head_model.voxel_to_vertex_scalp / normfactor
+                    )
+                else:
+                    warn(
+                        f"Observed zero fluence at optodes for channel {r.channel}. "
+                        "Check the montage!"
+                    )
+                    Adot_brain[i_ch, :, i_wl] = 0.
+                    Adot_scalp[i_ch, :, i_wl] = 0.
 
         is_brain = np.zeros((n_brain + n_scalp), dtype=bool)
         is_brain[:n_brain] = True
@@ -520,7 +527,7 @@ class ForwardModel:
         Adot *= np.prod(self._get_voxel_dimensions().to("mm")).magnitude
 
         if self._get_unitinmm() != 1:
-            warnings.warn("voxel size is not 1 mm^3. Check Adot normalization.")
+            warn("voxel size is not 1 mm^3. Check Adot normalization.")
 
         Adot = xr.DataArray(
             Adot.astype(np.float32),
