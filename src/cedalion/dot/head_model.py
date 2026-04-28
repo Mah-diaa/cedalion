@@ -1,3 +1,4 @@
+"""Two-surface head model and standard atlas loading for DOT forward modelling."""
 
 from __future__ import annotations
 
@@ -628,6 +629,21 @@ class TwoSurfaceHeadModel:
         self,
         target_landmarks : cdt.LabeledPoints
     ) -> "TwoSurfaceHeadModel":
+        """Scale the head model to match a set of anatomical landmarks.
+
+        Computes a general affine transform that maps the head model's RAS
+        landmarks to ``target_landmarks`` and applies it to both surfaces
+        and the stored affine transforms.
+
+        Args:
+            target_landmarks: Target landmark positions (e.g. from a digitizer)
+                in any CRS.  Must contain the same label subset as the model's
+                landmarks.
+
+        Returns:
+            New :class:`TwoSurfaceHeadModel` scaled and aligned to
+            ``target_landmarks``.
+        """
         if self.crs == "ijk":
             landmarks_ras = self.landmarks.points.apply_transform(self.t_ijk2ras)
         else:
@@ -653,6 +669,19 @@ class TwoSurfaceHeadModel:
     def scale_to_headsize(
         self, circumference: cdt.QLength, nz_cz_iz: cdt.QLength, lpa_cz_rpa: cdt.QLength
     ) -> "TwoSurfaceHeadModel":
+        """Scale the head model to match anthropometric head-size measurements.
+
+        Fits a tri-axial ellipsoid model to the three measurements, derives
+        corresponding landmark positions, and delegates to :meth:`scale_to_landmarks`.
+
+        Args:
+            circumference: Head circumference.
+            nz_cz_iz: Nasion–Cz–Inion arc length.
+            lpa_cz_rpa: Left preauricular–Cz–right preauricular arc length.
+
+        Returns:
+            New :class:`TwoSurfaceHeadModel` scaled to the specified head size.
+        """
         ellipsoid_landmarks = get_landmarks_for_headsize(
             circumference, nz_cz_iz, lpa_cz_rpa
         )
@@ -661,6 +690,16 @@ class TwoSurfaceHeadModel:
 
 
     def get_brain_mni152_coords(self) -> xr.DataArray:
+        """Return MNI152 vertex coordinates of the brain surface.
+
+        Returns:
+            xr.DataArray with dimensions ``(label, mni152)`` containing the
+            ``mni152_r``, ``mni152_a``, and ``mni152_s`` vertex coordinates.
+
+        Raises:
+            ValueError: If the brain surface does not have ``mni152_r/a/s``
+                vertex coordinates (i.e. not a standard atlas head model).
+        """
         v = self.brain.vertices
         if not all([f"mni152_{i}" in v.coords for i in ["r", "a", "s"]]):
             return ValueError("The cortex surface has no mni vertex coordinates")
@@ -742,6 +781,19 @@ def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
 
 @lru_cache
 def get_inflated_cortex_surface(model : str) -> cdc.TrimeshSurface:
+    """Load the inflated cortex surface for a standard atlas head model.
+
+    The result is cached after the first call.
+
+    Args:
+        model: Atlas name — one of ``"colin27"`` or ``"icbm152"``.
+
+    Returns:
+        :class:`~cedalion.dataclasses.TrimeshSurface` in the ``"inflated"`` CRS.
+
+    Raises:
+        ValueError: If ``model`` is not one of the supported atlases.
+    """
     AVAILABLE_MODELS = ["colin27", "icbm152"]
 
     if model == "colin27":
