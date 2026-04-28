@@ -43,6 +43,7 @@ class DesignMatrix:
 
     def __repr__(self):
         """Return a compact string representation listing common and channel-wise regressors."""
+
         cregs = (
             ",".join([f"'{r}'" for r in self.common.regressor.values])
             if self.common is not None
