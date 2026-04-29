@@ -46,6 +46,7 @@ html_theme_options = {
 # using the RTD theme
 html_css_files = [
     "css/rtd_fixes.css",
+    "css/contributors.css",
 ]
 
 html_js_files = [
@@ -66,6 +67,8 @@ def setup(app):
 
 myst_enable_extensions = [
     "substitution",
+    "dollarmath",
+    "amsmath",
 ]
 
 myst_heading_anchors = 2
