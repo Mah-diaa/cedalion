@@ -268,8 +268,8 @@ def isolate_head(
 
 def align_axes_from_landmarks(
     surface: cdc.TrimeshSurface,
-    landmarks: cdt.LabeledPointCloud,
-) -> tuple[cdc.TrimeshSurface, cdt.LabeledPointCloud, np.ndarray]:
+    landmarks: cdt.LabeledPoints,
+) -> tuple[cdc.TrimeshSurface, cdt.LabeledPoints, np.ndarray]:
     """Map mesh + landmarks into the CTF anatomical frame.
 
     CTF convention:
@@ -284,7 +284,9 @@ def align_axes_from_landmarks(
     Args:
         surface: Axis-normalized TrimeshSurface (post ``normalize_axes`` and
             ``isolate_head``).
-        landmarks: LabeledPointCloud with labels Nz, Iz, Cz, Lpa, Rpa
+        landmarks: LabeledPoints with labels Nz, Iz, Cz, and LPA/RPA (or
+            aliases like Lpa/Rpa, "left ear"/"right ear"; normalized
+            internally via ``normalize_landmarks_labels``)
             (matching the surface frame).
 
     Returns:
@@ -293,20 +295,22 @@ def align_axes_from_landmarks(
         points into CTF; apply as ``hom = transform @ [x, y, z, 1]``.
     """
     import trimesh
+    from cedalion.geometry.landmarks import normalize_landmarks_labels
 
+    landmarks = normalize_landmarks_labels(landmarks)
     lm = landmarks.pint.dequantify().values
     labels = list(landmarks["label"].values)
     idx = {lbl: i for i, lbl in enumerate(labels)}
 
-    required = {"Nz", "Iz", "Cz", "Lpa", "Rpa"}
+    required = {"Nz", "Iz", "Cz", "LPA", "RPA"}
     missing = required - set(labels)
     if missing:
         raise ValueError(f"Missing landmarks for alignment: {missing}")
 
     Nz = lm[idx["Nz"]]
     Cz = lm[idx["Cz"]]
-    Lpa = lm[idx["Lpa"]]
-    Rpa = lm[idx["Rpa"]]
+    Lpa = lm[idx["LPA"]]
+    Rpa = lm[idx["RPA"]]
     origin = 0.5 * (Lpa + Rpa)
 
     y_ax = Lpa - Rpa
@@ -354,10 +358,10 @@ def align_axes_from_landmarks(
 
 def revert_to_einstar_frame(
     surface: cdc.TrimeshSurface,
-    landmarks: cdt.LabeledPointCloud,
+    landmarks: cdt.LabeledPoints,
     R_normalize: np.ndarray,
     M_align: np.ndarray,
-) -> tuple[cdc.TrimeshSurface, cdt.LabeledPointCloud]:
+) -> tuple[cdc.TrimeshSurface, cdt.LabeledPoints]:
     """Map an aligned surface and landmarks back into the raw Einstar frame.
 
     Inverse of the ``normalize_axes`` then ``align_axes_from_landmarks``
@@ -374,7 +378,7 @@ def revert_to_einstar_frame(
     Args:
         surface: TrimeshSurface in the CTF frame (post
             ``align_axes_from_landmarks``, optionally after masking).
-        landmarks: LabeledPointCloud in the CTF frame.
+        landmarks: LabeledPoints in the CTF frame.
         R_normalize: 3x3 rotation returned by ``normalize_axes``.
         M_align: 4x4 affine returned by ``align_axes_from_landmarks``.
 

@@ -16,7 +16,6 @@ from scipy.spatial import KDTree
 
 import cedalion.dataclasses as cdc
 import cedalion.typing as cdt
-from cedalion import Quantity, units
 
 
 logger = logging.getLogger("cedalion")
@@ -31,10 +30,11 @@ class ValidationResult:
         mesh_valid: True if anonymized mesh has no degenerate faces
         expected_vertices_removed: Number of facial mask vertices
         actual_vertices_removed: Actual vertex count difference
-        protected_points_intact: True if all protected points are within
-            tolerance of the anonymized surface
-        protected_point_max_deviation: Worst-case deviation of any protected
-            point from the anonymized surface (mm)
+        protected_points_preserved: True if every protected point's nearest
+            vertex is bit-exact identical between original and anonymized mesh
+        protected_point_max_delta_mm: max |d_anon - d_orig| across protected
+            points; the deletion operator preserves surviving vertices
+            bit-exact, so this must be 0 for a correct run
         face_coverage_pct: Percentage of original vertices in the facial mask
         passed: True if all checks passed
         summary: Human-readable one-line summary
@@ -44,8 +44,8 @@ class ValidationResult:
     mesh_valid: bool
     expected_vertices_removed: int
     actual_vertices_removed: int
-    protected_points_intact: bool
-    protected_point_max_deviation: float
+    protected_points_preserved: bool
+    protected_point_max_delta_mm: float
     face_coverage_pct: float
     passed: bool
     summary: str
@@ -85,40 +85,50 @@ def _check_mesh_valid(mesh) -> bool:
 
 
 def _check_protected_points(
+    original_surface: cdc.TrimeshSurface,
     anonymized_surface: cdc.TrimeshSurface,
-    protected_points: cdt.LabeledPointCloud,
-    tolerance_mm: float,
+    protected_points: cdt.LabeledPoints,
 ) -> tuple[bool, float]:
-    """Check that all protected points have a nearby vertex on the surface.
+    """Check that the deletion operator preserved every protected point.
+
+    For each protected point, compute d_anon (distance to nearest vertex of
+    the anonymized mesh) and d_orig (distance to nearest vertex of the
+    original mesh) and report Delta = d_anon - d_orig. Since the deletion
+    operator only drops vertices and never repositions a surviving one, the
+    nearest vertex to a protected point is the same vertex in both meshes
+    whenever it survives, and Delta must be bit-exact zero. Any nonzero
+    Delta indicates a violation of the operator's invariant.
 
     Args:
+        original_surface: Mesh before anonymization
         anonymized_surface: Mesh after anonymization
-        protected_points: Points that should still be on the surface
-        tolerance_mm: Maximum allowed distance from surface (mm)
+        protected_points: Points whose nearest-vertex identity must be
+            preserved by the pipeline
 
     Returns:
-        Tuple of (all_within_tolerance, max_deviation_mm)
+        Tuple of (all_zero, max_abs_delta_mm)
     """
     if protected_points is None or len(protected_points.label) == 0:
         return True, 0.0
 
     positions = protected_points.pint.dequantify().values
-    tree = KDTree(anonymized_surface.mesh.vertices)
-    distances, _ = tree.query(positions)
+    d_orig, _ = KDTree(original_surface.mesh.vertices).query(positions)
+    d_anon, _ = KDTree(anonymized_surface.mesh.vertices).query(positions)
+    delta = d_anon - d_orig
 
-    max_dev = float(np.max(distances))
-    all_ok = max_dev <= tolerance_mm
+    max_abs_delta = float(np.max(np.abs(delta)))
+    all_zero = max_abs_delta == 0.0
 
-    if not all_ok:
+    if not all_zero:
         labels = [str(l) for l in protected_points.label.values]
-        for i, (label, dist) in enumerate(zip(labels, distances)):
-            if dist > tolerance_mm:
+        for label, d in zip(labels, delta):
+            if d != 0.0:
                 logger.warning(
-                    f"Protected point '{label}' is {dist:.2f}mm from "
-                    f"anonymized surface (tolerance: {tolerance_mm}mm)"
+                    f"Protected point '{label}' shifted by {d:+.3e} mm "
+                    f"(d_anon - d_orig); operator invariant violated"
                 )
 
-    return all_ok, max_dev
+    return all_zero, max_abs_delta
 
 
 @cdc.validate_schemas
@@ -126,15 +136,15 @@ def validate_anonymization(
     original_surface: cdc.TrimeshSurface,
     anonymized_surface: cdc.TrimeshSurface,
     facial_mask: np.ndarray,
-    protected_points: cdt.LabeledPointCloud = None,
-    tolerance: Quantity = 1.0 * units.mm,
+    protected_points: cdt.LabeledPoints = None,
 ) -> ValidationResult:
     """Run post-anonymization sanity checks.
 
     Verifies that:
     1. The facial region was actually removed (vertex count dropped)
     2. The remaining mesh is valid (no degenerate faces)
-    3. Protected points (optodes, landmarks) are still on the surface
+    3. The deletion operator preserved every protected point's
+       nearest-vertex identity (Delta = d_anon - d_orig must be 0)
 
     This is a practical bug-catcher, not a scientific validation metric.
     For scientific validation of fNIRS utility preservation, compare
@@ -144,16 +154,12 @@ def validate_anonymization(
         original_surface: Original mesh before anonymization
         anonymized_surface: Mesh after anonymization
         facial_mask: Boolean mask of facial vertices on the original mesh
-        protected_points: Landmarks and/or optodes that should still be
-            reachable on the anonymized surface (optional)
-        tolerance: Maximum allowed distance from protected points to the
-            anonymized surface
+        protected_points: Landmarks and/or optodes whose nearest-vertex
+            identity must be preserved by the pipeline (optional)
 
     Returns:
         ValidationResult with pass/fail and diagnostic info
     """
-    tolerance_mm = float(tolerance.to("mm").magnitude)
-
     # Check 1: Face removed — vertex count dropped
     orig_count = len(original_surface.mesh.vertices)
     anon_count = len(anonymized_surface.mesh.vertices)
@@ -173,20 +179,20 @@ def validate_anonymization(
     # Check 2: Mesh valid
     mesh_valid = _check_mesh_valid(anonymized_surface.mesh)
 
-    # Check 3: Protected points still on surface
-    points_intact, max_dev = _check_protected_points(
-        anonymized_surface, protected_points, tolerance_mm
+    # Check 3: Protected-point preservation (Delta = d_anon - d_orig == 0)
+    points_preserved, max_delta = _check_protected_points(
+        original_surface, anonymized_surface, protected_points
     )
 
     # Overall pass/fail
-    passed = face_removed and mesh_valid and points_intact
+    passed = face_removed and mesh_valid and points_preserved
 
     # Build summary
     if passed:
         summary = (
             f"PASSED — {actual_removed:,} vertices removed "
             f"({face_coverage_pct:.1f}%), mesh valid, "
-            f"protected points within {tolerance_mm}mm"
+            f"protected points preserved (max |Delta| = 0)"
         )
     else:
         issues = []
@@ -197,10 +203,9 @@ def validate_anonymization(
             )
         if not mesh_valid:
             issues.append("mesh has degenerate faces")
-        if not points_intact:
+        if not points_preserved:
             issues.append(
-                f"protected point {max_dev:.2f}mm from surface "
-                f"(tolerance: {tolerance_mm}mm)"
+                f"protected point shifted: max |Delta| = {max_delta:.3e} mm"
             )
         summary = f"FAILED — {'; '.join(issues)}"
 
@@ -211,8 +216,8 @@ def validate_anonymization(
         mesh_valid=mesh_valid,
         expected_vertices_removed=expected_removed,
         actual_vertices_removed=actual_removed,
-        protected_points_intact=points_intact,
-        protected_point_max_deviation=max_dev,
+        protected_points_preserved=points_preserved,
+        protected_point_max_delta_mm=max_delta,
         face_coverage_pct=face_coverage_pct,
         passed=passed,
         summary=summary,

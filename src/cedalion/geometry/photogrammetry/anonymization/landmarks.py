@@ -25,7 +25,7 @@ logger = logging.getLogger("cedalion")
 def detect_landmarks_from_nasion(
     surface: cdc.TrimeshSurface,
     nz_position: np.ndarray,
-) -> cdt.LabeledPointCloud:
+) -> cdt.LabeledPoints:
     """Detect anatomical landmarks from a user-provided nasion (Nz) position.
 
     **Important:** The surface must be axis-normalized before calling this
@@ -45,7 +45,7 @@ def detect_landmarks_from_nasion(
         nz_position: Nasion position as numpy array of shape (3,), in mm
 
     Returns:
-        LabeledPointCloud with landmarks labeled as Nz, Iz, Cz, LPA, RPA
+        LabeledPoints with landmarks labeled as Nz, Iz, Cz, LPA, RPA
 
     Raises:
         ValueError: If landmark configuration fails validation
