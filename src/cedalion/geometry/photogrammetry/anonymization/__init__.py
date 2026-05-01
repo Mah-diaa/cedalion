@@ -8,7 +8,7 @@ scientific utility.
 The pipeline works as follows:
 
 1. User picks the 5 landmarks (Nz, Iz, Cz, LPA, RPA) via the upstream
-   ``cedalion.plots.plot_surface(pick_landmarks=True)`` picker.
+   ``cedalion.vis.blocks.plot_surface(pick_landmarks=True)`` picker.
 2. Normalize axes so Y=anterior, Z=left (``preprocessing``).
 3. Isolate the head and remove disconnected fragments (``preprocessing``).
 4. Align the full frame from the 5 landmarks (``preprocessing``).
@@ -54,7 +54,6 @@ from .mask import (
     delete_masked_vertices,
     save_anonymized_scan,
 )
-from .validator import validate_anonymization
 
 
 __all__ = [
@@ -71,6 +70,4 @@ __all__ = [
     "face_mask_from_landmarks",
     "delete_masked_vertices",
     "save_anonymized_scan",
-    # Validation
-    "validate_anonymization",
 ]

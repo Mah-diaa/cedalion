@@ -32,8 +32,10 @@ def detect_cap_boundary(
     ear_mid: np.ndarray,
     mid_y: float,
     band_width: float = 15.0,
-    bin_size: float = 2.0,
+    bin_size: float = 1.0,
     foot_grad_threshold: float = 0.2,
+    cap_z_ceiling_mm: float = 40.0,
+    eyebrow_offset_mm: float = 10.0,
 ) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
     """Find the Z height where the EEG cap front edge sits.
 
@@ -42,6 +44,13 @@ def detect_cap_boundary(
     cap. The cap edge is the foot of the steep rise leading to the peak:
     walk back from the peak until the smoothed gradient drops below
     ``foot_grad_threshold``.
+
+    Failsafe for flush / no-optode caps: when the cap sits flat against
+    the head (no optodes), the anterior bump vanishes and the X-max
+    profile is roughly monotonic up to ``Cz``, leaving ``cap_z`` stuck
+    near the crown. If the detected ``cap_z`` exceeds
+    ``Nz[2] + cap_z_ceiling_mm``, fall back to a fixed cut at
+    ``Nz[2] + eyebrow_offset_mm`` (just above the supraorbital ridge).
 
     Expects the CTF frame (+X=anterior, +Y=left, +Z=up).
 
@@ -54,6 +63,10 @@ def detect_cap_boundary(
         band_width: Y-band half-width for the midline X-profile (mm).
         bin_size: Z-bin size for the X-profile (mm).
         foot_grad_threshold: dX/dZ below this value marks the foot of the rise.
+        cap_z_ceiling_mm: Absolute mm above Nz at which the cap-peak
+            detection is considered untrustworthy and the failsafe fires.
+        eyebrow_offset_mm: Failsafe cut height, expressed as mm above Nz.
+            Anatomically just above the supraorbital ridge.
 
     Returns:
         Tuple of (cap_z, profile_z, profile_x_raw, profile_x_smooth).
@@ -93,6 +106,16 @@ def detect_cap_boundary(
         if grad[i] < foot_grad_threshold:
             cap_z = zv[i]
             break
+
+    ceiling = Nz[2] + cap_z_ceiling_mm
+    if cap_z > ceiling:
+        fallback = Nz[2] + eyebrow_offset_mm
+        logger.info(
+            f"detect_cap_boundary: cap_z={cap_z:.1f} mm exceeded ceiling "
+            f"Nz+{cap_z_ceiling_mm:.0f}={ceiling:.1f}; assuming flush cap "
+            f"and falling back to Nz+{eyebrow_offset_mm:.0f}={fallback:.1f} mm."
+        )
+        cap_z = fallback
 
     return cap_z, zv, xv, xv_s
 
@@ -211,84 +234,110 @@ def delete_masked_vertices(
     )
 
 
-def _bake_vertex_colors(mesh) -> np.ndarray:
-    """Sample the texture image at each vertex's UV to produce per-vertex RGBA.
+def _sanitize_texture_from_uv(
+    mesh,
+    fill: tuple[int, int, int] = (0, 0, 0),
+) -> "Image.Image | None":
+    """Rebuild the texture image keeping only pixels referenced by mesh UVs.
+
+    Rasterizes every surviving face's UV triangle onto a keep-mask the size
+    of the source image. Pixels outside the mask are set to ``fill`` so
+    face-region pixels (no longer referenced after anonymization) cannot leak
+    through the JPG. The mask is dilated by 1 pixel to absorb anti-aliasing
+    fringes at triangle boundaries.
 
     OBJ UVs use the bottom-left origin convention; PIL images use top-left,
-    so V is flipped before indexing. UVs outside ``[0, 1]`` are wrapped
-    (modulo 1) to match typical OBJ sampler behavior.
+    so V is flipped before rasterizing.
 
     Args:
         mesh: A ``trimesh.Trimesh`` with ``mesh.visual`` as ``TextureVisuals``.
+        fill: RGB fill color for unreferenced pixels.
 
     Returns:
-        ``(n_vertices, 4)`` uint8 RGBA array. Falls back to uniform mid-grey
-        (with a warning) if the mesh has no usable texture.
+        Sanitized PIL Image in RGB mode, or ``None`` if the mesh has no
+        usable texture (caller should fall back to geometry-only output).
     """
+    from PIL import Image, ImageDraw, ImageFilter
+
     visual = mesh.visual
     uv = getattr(visual, "uv", None)
     image = getattr(visual, "image", None)
     if image is None:
         mat = getattr(visual, "material", None)
         image = getattr(mat, "image", None) if mat is not None else None
-    n_verts = len(mesh.vertices)
 
-    fallback = np.full((n_verts, 4), 180, dtype=np.uint8)
-    fallback[:, 3] = 255
+    if uv is None or image is None or len(uv) != len(mesh.vertices):
+        return None
 
-    if uv is None or image is None or len(uv) != n_verts:
-        logger.warning(
-            "with_color=True requested but mesh has no usable texture; "
-            "falling back to uniform grey vertex colors."
-        )
-        return fallback
+    img_rgb = np.asarray(image.convert("RGB"))
+    h, w = img_rgb.shape[:2]
 
-    img = np.asarray(image.convert("RGBA"))
-    h, w = img.shape[:2]
+    uv = np.asarray(uv)
+    px = np.mod(uv[:, 0], 1.0) * w
+    py = (1.0 - np.mod(uv[:, 1], 1.0)) * h
 
-    u = np.mod(np.asarray(uv)[:, 0], 1.0)
-    v = np.mod(np.asarray(uv)[:, 1], 1.0)
-    px = np.clip((u * w).astype(np.int64), 0, w - 1)
-    py = np.clip(((1.0 - v) * h).astype(np.int64), 0, h - 1)
+    mask_img = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(mask_img)
+    for face in np.asarray(mesh.faces):
+        pts = [(px[i], py[i]) for i in face]
+        draw.polygon(pts, fill=255)
+    mask_img = mask_img.filter(ImageFilter.MaxFilter(3))
+    keep = np.asarray(mask_img) > 0
 
-    return img[py, px]
+    out = np.empty_like(img_rgb)
+    out[keep] = img_rgb[keep]
+    out[~keep] = fill
+    return Image.fromarray(out, mode="RGB")
+
+
+_MTL_TEMPLATE = (
+    "newmtl _texture\n"
+    "Kd 1.00 1.00 1.00\n"
+    "Ka 0.00 0.00 0.00\n"
+    "Tf 1.00 1.00 1.00\n"
+    "Ni 1.00\n"
+    "map_Kd {jpg_name}\n"
+)
 
 
 def save_anonymized_scan(
     surface: cdc.TrimeshSurface,
     out_path: str,
     landmarks: "xr.DataArray | None" = None,
-    with_color: bool = False,
+    strip_texture: bool = False,
 ) -> list[str]:
     """Export an anonymized photogrammetry surface to disk.
 
-    Always writes only the ``.obj`` file -- no MTL, no JPG. The original
-    texture raster is never written alongside the mesh, so the subject's face
-    pixels cannot leak through a saved image.
+    Default path (``strip_texture=False``): writes an ``.obj`` + ``.mtl`` +
+    sanitized ``.jpg`` bundle. The JPG is rebuilt from the original texture
+    so it contains colors *only* for UV regions still referenced by the
+    anonymized mesh; every other pixel (notably the face region) is set to
+    the fill color. Opening the JPG alone therefore reveals no face pixels.
 
-    - ``with_color=False`` (default): strip the texture entirely. Smallest
-      file, geometry only.
-    - ``with_color=True``: sample the texture at each kept vertex's UV and
-      bake the result as per-vertex colors inline in the ``.obj``. The JPG
-      is consumed in-memory and discarded; no raster is written.
+    ``strip_texture=True`` is an explicit opt-out that writes only the
+    geometry ``.obj`` (no MTL, no JPG).
+
+    If the input mesh has no usable texture (no UVs or no image), falls
+    back to geometry-only output with a warning.
 
     If ``landmarks`` is provided, also writes ``{stem}_landmarks.tsv`` next to
-    the ``.obj`` using ``cedalion.io.export_to_tsv``. The resulting TSV is the
-    file that gets uploaded at step 5.2 of the cedalion photogrammetry
+    the ``.obj`` using ``cedalion.io.export_to_tsv``. The resulting TSV is
+    the file that gets uploaded at step 5.2 of the cedalion photogrammetry
     co-registration tutorial.
 
     Args:
         surface: Anonymized TrimeshSurface (typically output of
             ``delete_masked_vertices``).
         out_path: Destination path ending in ``.obj``.
-        landmarks: Optional LabeledPointCloud of landmarks (Nz, Iz, LPA, RPA,
+        landmarks: Optional LabeledPoints of landmarks (Nz, Iz, LPA, RPA,
             Cz) to persist alongside the mesh as a TSV. Should be in the same
             frame as ``surface``.
-        with_color: If True, bake per-vertex colors from the texture.
+        strip_texture: If True, skip the MTL + JPG and write geometry only.
 
     Returns:
-        List of absolute paths written (``.obj`` plus ``_landmarks.tsv`` when
-        ``landmarks`` is given).
+        List of absolute paths written (``.obj`` plus ``.mtl`` + ``.jpg``
+        when a texture was written, plus ``_landmarks.tsv`` when landmarks
+        were given).
 
     Raises:
         ValueError: If ``out_path`` does not end in ``.obj``.
@@ -299,28 +348,52 @@ def save_anonymized_scan(
     if not out_path.lower().endswith(".obj"):
         raise ValueError(f"out_path must end in .obj, got: {out_path}")
 
-    vcolors = _bake_vertex_colors(surface.mesh) if with_color else None
+    out_dir = os.path.dirname(os.path.abspath(out_path)) or "."
+    stem = os.path.splitext(os.path.basename(out_path))[0]
+
+    sanitized = None if strip_texture else _sanitize_texture_from_uv(surface.mesh)
 
     mesh_to_write = trimesh.Trimesh(
         vertices=np.asarray(surface.mesh.vertices),
         faces=np.asarray(surface.mesh.faces),
         process=False,
     )
-    if vcolors is not None:
-        mesh_to_write.visual.vertex_colors = vcolors
 
-    out_dir = os.path.dirname(os.path.abspath(out_path)) or "."
-    before = set(os.listdir(out_dir)) if os.path.isdir(out_dir) else set()
+    written: list[str] = []
 
-    mesh_to_write.export(out_path)
+    if sanitized is not None:
+        jpg_name = f"{stem}.jpg"
+        mtl_name = f"{stem}.mtl"
+        jpg_path = os.path.join(out_dir, jpg_name)
+        mtl_path = os.path.join(out_dir, mtl_name)
 
-    after = set(os.listdir(out_dir)) if os.path.isdir(out_dir) else set()
-    stem = os.path.splitext(os.path.basename(out_path))[0]
-    written = sorted(
-        os.path.join(out_dir, f)
-        for f in (after - before) | {os.path.basename(out_path)}
-        if os.path.splitext(f)[0] == stem or f == os.path.basename(out_path)
-    )
+        sanitized.save(jpg_path, format="JPEG", quality=92)
+        with open(mtl_path, "w") as fh:
+            fh.write(_MTL_TEMPLATE.format(jpg_name=jpg_name))
+
+        mesh_to_write.visual = trimesh.visual.TextureVisuals(
+            uv=np.asarray(surface.mesh.visual.uv),
+            image=sanitized,
+        )
+        obj_text = trimesh.exchange.obj.export_obj(
+            mesh_to_write,
+            include_texture=True,
+            write_texture=False,
+            mtl_name=mtl_name,
+        )
+        obj_text = _ensure_mtllib(obj_text, mtl_name)
+        with open(out_path, "w") as fh:
+            fh.write(obj_text)
+
+        written.extend([out_path, mtl_path, jpg_path])
+    else:
+        if not strip_texture:
+            logger.warning(
+                "save_anonymized_scan: input mesh has no usable texture; "
+                "falling back to geometry-only OBJ."
+            )
+        mesh_to_write.export(out_path)
+        written.append(out_path)
 
     if landmarks is not None:
         from cedalion.io import export_to_tsv
@@ -335,7 +408,19 @@ def save_anonymized_scan(
         )
 
     logger.info(
-        f"Saved anonymized scan (with_color={with_color}): "
+        f"Saved anonymized scan: "
         f"{[os.path.basename(p) for p in written]}"
     )
-    return written
+    return sorted(written)
+
+
+def _ensure_mtllib(obj_text: str, mtl_name: str) -> str:
+    """Guarantee the OBJ references our MTL via ``mtllib`` and ``usemtl``.
+
+    Trimesh's OBJ exporter may or may not emit material lines depending on
+    version; rewrite deterministically so the MTL pairing is stable.
+    """
+    lines = obj_text.splitlines()
+    lines = [l for l in lines if not l.startswith(("mtllib ", "usemtl "))]
+    header = [f"mtllib {mtl_name}", "usemtl _texture"]
+    return "\n".join(header + lines) + "\n"
