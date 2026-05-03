@@ -1,7 +1,13 @@
 # Changelog
 
 ## Unreleased changes (available on the `dev` branch)
- 
+
+### Additions and Changes
+
+#### Photogrammetry
+
+- Added `cedalion.geometry.photogrammetry.anonymization`, a deletion-based face removal pipeline for photogrammetry scans. From the five anatomical landmarks (Nz, Iz, Cz, LPA, RPA), the pipeline normalizes axes, isolates the head, detects the cap boundary, builds a face mask, deletes the masked vertices, and saves the anonymized mesh together with the landmarks. See `examples/head_models/51_manual_5pt_anonymization.ipynb` for an end-to-end walkthrough.
+
 ## Version 26.04.0 (in preparation)
 
 ### Additions and Changes
