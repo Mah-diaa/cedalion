@@ -22,10 +22,8 @@ The pipeline works as follows:
    ``save_anonymized_scan(surface, out_path, landmarks=...)``. The TSV is
    what the co-registration tutorial loads at step 5.2.
 
-``detect_landmarks_from_nasion`` (``landmarks``) is an alternative that takes
-just the nasion and geometrically infers the other four. An alternative
-MediaPipe-based automatic pipeline lives on the ``auto-detection-pipeline``
-branch.
+An alternative MediaPipe-based automatic detection pipeline lives on the
+``auto-detection-pipeline`` branch.
 
 Example:
     >>> from cedalion.geometry.photogrammetry.anonymization import (
@@ -47,7 +45,6 @@ from .preprocessing import (
     align_axes_from_landmarks,
     revert_to_einstar_frame,
 )
-from .landmarks import detect_landmarks_from_nasion
 from .mask import (
     detect_cap_boundary,
     face_mask_from_landmarks,
@@ -63,8 +60,6 @@ __all__ = [
     "isolate_head",
     "align_axes_from_landmarks",
     "revert_to_einstar_frame",
-    # Landmark detection
-    "detect_landmarks_from_nasion",
     # Mask construction and application
     "detect_cap_boundary",
     "face_mask_from_landmarks",
