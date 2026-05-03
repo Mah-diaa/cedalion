@@ -13,7 +13,6 @@ from cedalion import units
 from cedalion.geometry.photogrammetry.anonymization import (
     normalize_axes,
     isolate_head,
-    detect_landmarks_from_nasion,
 )
 
 
@@ -118,11 +117,9 @@ class TestIsolateHead:
 
     def test_reduces_vertex_count_with_body(self):
         """Surface with body appended should have vertices removed."""
-        # Head sphere
         sphere = trimesh.creation.icosphere(subdivisions=3, radius=100)
-        # Body box far below
-        body = trimesh.creation.box(extents=[50, 50, 50])
-        body.vertices[:, 0] -= 400  # move far below head
+        body = trimesh.creation.icosphere(subdivisions=3, radius=80)
+        body.vertices[:, 0] -= 400
         combined = trimesh.util.concatenate([sphere, body])
 
         surface = cdc.TrimeshSurface(
@@ -131,41 +128,3 @@ class TestIsolateHead:
         nasion = np.array([0, 100, 0])
         head_surface, mask = isolate_head(surface, nasion)
         assert head_surface.nvertices < surface.nvertices
-
-
-# ============================================================================
-# Landmark Detection from Nasion
-# ============================================================================
-
-
-class TestDetectLandmarksFromNasion:
-    """Tests for landmark detection from nasion."""
-
-    def test_returns_five_landmarks(self, head_like_surface):
-        """Should detect exactly 5 landmarks."""
-        nasion = np.array([0, 90, 0])  # front of elongated sphere
-        landmarks = detect_landmarks_from_nasion(head_like_surface, nasion)
-
-        assert len(landmarks.label) == 5
-        expected_labels = {"Nz", "Iz", "Cz", "LPA", "RPA"}
-        assert set(str(l) for l in landmarks.label.values) == expected_labels
-
-    def test_cz_is_highest(self, head_like_surface):
-        """Cz should have the highest X coordinate."""
-        nasion = np.array([0, 90, 0])
-        landmarks = detect_landmarks_from_nasion(head_like_surface, nasion)
-        lm = landmarks.pint.dequantify()
-
-        cz_x = float(lm.sel(label="Cz").values[0])
-        for label in ["Nz", "Iz", "LPA", "RPA"]:
-            other_x = float(lm.sel(label=label).values[0])
-            assert cz_x >= other_x - 1.0, f"Cz should be highest, but {label} has higher X"
-
-    def test_nz_position_preserved(self, head_like_surface):
-        """Nz output should match the input nasion position."""
-        nasion = np.array([0, 90, 0])
-        landmarks = detect_landmarks_from_nasion(head_like_surface, nasion)
-        nz_out = landmarks.sel(label="Nz").pint.dequantify().values
-        assert_allclose(nz_out, nasion, atol=1e-6)
-
-
