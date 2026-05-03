@@ -61,7 +61,6 @@ dependencies = [
   "seedir",
 ]
 
-
 [project.urls]
 Home = "https://ibs-lab.com/cedalion/"
 Documentation = "https://doc.ibs.tu-berlin.de/cedalion/doc/dev/"

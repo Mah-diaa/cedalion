@@ -186,3 +186,6 @@ scratch/
 plugins/
 
 .claude/worktrees/sharp-burnell/
+
+# thesis-only generated artifacts (regenerable from validation notebooks)
+examples/head_models/thesis_results_out/
