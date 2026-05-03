@@ -9,17 +9,25 @@ landmark detection and mask building:
 - ``align_axes_from_landmarks`` maps the scan into the CTF frame
   (+X=anterior, +Y=left, +Z=up, origin at the LPA-RPA midpoint) once all 5
   landmarks are available.
-
-Initial Contributors:
-    - Face Anonymization Project | 2024
 """
 
 import logging
 
 import numpy as np
+import trimesh
 
 import cedalion.dataclasses as cdc
 import cedalion.typing as cdt
+from cedalion.geometry.landmarks import normalize_landmarks_labels
+
+from ._utils import (
+    _apply_affine,
+    _ear_midpoint,
+    _reindex_faces,
+    _resolve_texture_image,
+    _transform_labeled_points,
+    _upper_head_centroid,
+)
 
 logger = logging.getLogger("cedalion")
 
@@ -27,36 +35,32 @@ logger = logging.getLogger("cedalion")
 def _copy_visual(src_mesh, dst_mesh, vertex_index=None) -> None:
     """Copy a trimesh ``visual`` onto ``dst_mesh``, optionally reindexing.
 
-    Assigning a ``TextureVisuals`` directly across meshes (e.g. by passing
-    ``visual=old.visual`` to a new ``Trimesh(...)``) often silently downgrades
-    it to ``ColorVisuals`` because the visual holds a back-reference to its
-    original mesh and re-checks ``len(uv) == len(mesh.vertices)`` against the
-    wrong target. Rebuilding the visual explicitly avoids that.
+    Passing ``visual=old.visual`` to a new ``Trimesh(...)`` silently downgrades
+    a ``TextureVisuals`` to ``ColorVisuals`` because the visual still
+    back-references the source mesh's vertex count. Rebuilding explicitly
+    avoids that.
 
     Args:
         src_mesh: Source trimesh.
         dst_mesh: Destination trimesh (mutated in place).
-        vertex_index: Optional indices into the source vertex array. If given,
-            UVs / vertex_colors are sliced by this index before being attached.
-            Leave None when the vertex count is unchanged.
+        vertex_index: Indices into the source vertex array. If given, UVs /
+            vertex_colors are sliced by this index. Leave None when the
+            vertex count is unchanged.
     """
-    import trimesh
-
     src_visual = src_mesh.visual
     uv = getattr(src_visual, "uv", None)
-    image = getattr(src_visual, "image", None)
     n_src = len(src_mesh.vertices)
 
     if uv is not None and len(uv) == n_src:
         uv_arr = np.asarray(uv)
         if vertex_index is not None:
             uv_arr = uv_arr[vertex_index]
-        if image is None:
-            mat = getattr(src_visual, "material", None)
-            image = getattr(mat, "image", None) if mat is not None else None
+        image = _resolve_texture_image(src_visual)
+        material = getattr(src_visual, "material", None)
         dst_mesh.visual = trimesh.visual.TextureVisuals(
             uv=uv_arr,
             image=image,
+            material=material,
         )
         return
 
@@ -68,44 +72,48 @@ def _copy_visual(src_mesh, dst_mesh, vertex_index=None) -> None:
         dst_mesh.visual.vertex_colors = vcol_arr
 
 
+def _rebuild_mesh(
+    src_mesh: trimesh.Trimesh,
+    *,
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    vertex_index: np.ndarray | None = None,
+) -> trimesh.Trimesh:
+    """Build a new ``Trimesh`` and re-attach the source visual.
+
+    Centralizes the ``Trimesh(... process=False)`` + ``_copy_visual`` duo
+    used by every transform in the pipeline.
+    """
+    new_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    _copy_visual(src_mesh, new_mesh, vertex_index=vertex_index)
+    return new_mesh
+
+
+@cdc.validate_schemas
 def normalize_axes(
     surface: cdc.TrimeshSurface,
     nasion: np.ndarray,
-    forward_direction: np.ndarray = None,
 ) -> tuple[cdc.TrimeshSurface, np.ndarray, np.ndarray]:
     """Rotate mesh around X-axis so Y=anterior (toward face), Z=left.
 
-    The Einstar scanner has X=up (gravity-based) but Y/Z are arbitrary per
-    scan session. This function uses the nasion position to determine the
-    forward direction and rotates the mesh so that Y consistently points
-    toward the face (anterior) and Z points left.
+    The Einstar scanner fixes X=up (gravity-based) but leaves Y/Z arbitrary
+    per scan. The forward direction is inferred from the nasion against the
+    upper-head centroid.
 
     Args:
         surface: TrimeshSurface in raw Einstar coordinates.
-        nasion: Nasion position as numpy array of shape (3,).
-        forward_direction: Optional pre-computed forward unit vector in YZ
-            plane (X=0). If None, computed from nasion vs upper-head centroid.
+        nasion: Nasion position as numpy array of shape (3,), in mm, in the
+            raw Einstar frame (matching ``surface``).
 
     Returns:
         Tuple of (rotated_surface, rotated_nasion, rotation_matrix).
-        rotation_matrix is 3x3 and can be applied to other points.
+        ``rotated_nasion`` is in the same units as the input. The 3x3
+        ``rotation_matrix`` can be applied to other points via ``p @ R.T``.
     """
     vertices = surface.mesh.vertices
 
-    if forward_direction is None:
-        x_max = vertices[:, 0].max()
-        x_min = vertices[:, 0].min()
-        upper = vertices[vertices[:, 0] > x_min + 0.6 * (x_max - x_min)]
-        centroid_yz = np.array([0.0, upper[:, 1].mean(), upper[:, 2].mean()])
-        nasion_yz = np.array([0.0, nasion[1], nasion[2]])
-        forward_direction = nasion_yz - centroid_yz
-        fwd_norm = np.linalg.norm(forward_direction)
-        if fwd_norm < 1e-6:
-            logger.warning("Cannot compute forward direction -- returning unchanged")
-            return surface, nasion.copy(), np.eye(3)
-        forward_direction = forward_direction / fwd_norm
-
-    angle = np.arctan2(forward_direction[2], forward_direction[1])
+    centroid, _ = _upper_head_centroid(np.asarray(vertices))
+    angle = np.arctan2(nasion[2] - centroid[2], nasion[1] - centroid[1])
     cos_a = np.cos(-angle)
     sin_a = np.sin(-angle)
     R = np.array([
@@ -114,15 +122,11 @@ def normalize_axes(
         [0.0, sin_a, cos_a],
     ])
 
-    rotated_verts = vertices @ R.T
-
-    import trimesh
-    new_mesh = trimesh.Trimesh(
-        vertices=rotated_verts,
+    new_mesh = _rebuild_mesh(
+        surface.mesh,
+        vertices=vertices @ R.T,
         faces=surface.mesh.faces,
-        process=False,
     )
-    _copy_visual(surface.mesh, new_mesh)
     rotated_surface = cdc.TrimeshSurface(new_mesh, crs=surface.crs, units=surface.units)
 
     rotated_nasion = R @ nasion
@@ -135,41 +139,35 @@ def normalize_axes(
     return rotated_surface, rotated_nasion, R
 
 
-def _largest_component_mask(mesh) -> np.ndarray:
+def _largest_component_mask(mesh: trimesh.Trimesh) -> np.ndarray:
     """Boolean vertex mask selecting the largest connected component.
 
-    Einstar scans are non-watertight and frequently contain tiny floating
-    mesh fragments (loose triangles, cable shreds, background patches)
-    that sit far outside the head. Any step that uses vertex extrema will
-    be dragged off into empty space by those fragments. Stripping them
-    up-front prevents that.
+    Einstar scans contain floating fragments (loose triangles, cable shreds,
+    background patches) that drag vertex extrema off into empty space; strip
+    them first.
 
-    Uses ``trimesh.graph.connected_component_labels`` on face adjacency
-    rather than ``mesh.split``; split allocates one full ``Trimesh`` per
-    component and can OOM on scans with thousands of tiny fragments.
+    Uses ``trimesh.graph.connected_component_labels`` on face adjacency rather
+    than ``mesh.split``: split allocates a ``Trimesh`` per component and can
+    OOM on scans with thousands of fragments.
 
-    Einstar OBJs duplicate vertices along UV seams for texturing. The
-    default ``trimesh.Trimesh.merge_vertices()`` does NOT merge across UV
-    seams (it preserves texture), so face adjacency on the raw mesh
-    over-fragments the head into thousands of islands. We use POSITION-only
-    merging via ``unique_rows`` for connectivity analysis.
+    Einstar OBJs duplicate vertices along UV seams; ``Trimesh.merge_vertices``
+    preserves seams (to keep textures), so face adjacency on the raw mesh
+    over-fragments the head. ``trimesh.grouping.unique_rows`` does
+    position-only merging for connectivity analysis.
 
     Args:
         mesh: A ``trimesh.Trimesh`` instance.
 
     Returns:
-        Boolean array of shape ``(n_vertices,)``. All-True if the mesh
-        is empty or already a single connected component.
+        Boolean array of shape ``(n_vertices,)``. All-True if the mesh is
+        empty or already a single connected component.
     """
-    import trimesh
     n_verts = len(mesh.vertices)
     n_faces = len(mesh.faces)
     if n_faces == 0:
         return np.ones(n_verts, dtype=bool)
 
-    unique_idx, inverse = trimesh.grouping.unique_rows(
-        np.asarray(mesh.vertices)
-    )
+    _, inverse = trimesh.grouping.unique_rows(np.asarray(mesh.vertices))
     canonical_faces = inverse[mesh.faces]
     adjacency = trimesh.graph.face_adjacency(faces=canonical_faces)
     face_labels = trimesh.graph.connected_component_labels(
@@ -187,6 +185,7 @@ def _largest_component_mask(mesh) -> np.ndarray:
     return mask
 
 
+@cdc.validate_schemas
 def isolate_head(
     surface: cdc.TrimeshSurface,
     nasion: np.ndarray,
@@ -203,7 +202,8 @@ def isolate_head(
 
     Args:
         surface: Axis-normalized TrimeshSurface.
-        nasion: Nasion position as numpy array of shape (3,).
+        nasion: Nasion position as numpy array of shape (3,), in mm,
+            in the axis-normalized frame (matching ``surface``).
         radius: Sphere radius in mm (default 220). A human head has
             ~90mm radius; 220mm adds margin for ears and jaw.
 
@@ -212,15 +212,10 @@ def isolate_head(
         array of shape (n_vertices,) indicating which original
         vertices were kept.
     """
-    import trimesh
+    vertices = np.asarray(surface.mesh.vertices)
+    faces = np.asarray(surface.mesh.faces)
 
-    vertices = surface.mesh.vertices
-    faces = surface.mesh.faces
-
-    x_max = vertices[:, 0].max()
-    x_min = vertices[:, 0].min()
-    upper = vertices[:, 0] > x_min + 0.6 * (x_max - x_min)
-    center = vertices[upper].mean(axis=0)
+    center, x_max = _upper_head_centroid(vertices)
     midpoint_x = (x_max + nasion[0]) / 2.0
     center[0] = min(center[0], midpoint_x)
 
@@ -237,20 +232,14 @@ def isolate_head(
         return surface, head_mask
 
     face_mask = head_mask[faces].all(axis=1)
-    head_faces = faces[face_mask]
+    new_verts, new_faces, kept_vidx = _reindex_faces(vertices, faces, face_mask)
 
-    kept_verts = np.unique(head_faces)
-    reindex = np.full(len(vertices), -1, dtype=int)
-    reindex[kept_verts] = np.arange(len(kept_verts))
-    new_faces = reindex[head_faces]
-    new_verts = vertices[kept_verts]
-
-    new_mesh = trimesh.Trimesh(
+    new_mesh = _rebuild_mesh(
+        surface.mesh,
         vertices=new_verts,
         faces=new_faces,
-        process=False,
+        vertex_index=kept_vidx,
     )
-    _copy_visual(surface.mesh, new_mesh, vertex_index=kept_verts)
 
     head_surface = cdc.TrimeshSurface(
         new_mesh, crs=surface.crs, units=surface.units
@@ -266,6 +255,7 @@ def isolate_head(
     return head_surface, head_mask
 
 
+@cdc.validate_schemas
 def align_axes_from_landmarks(
     surface: cdc.TrimeshSurface,
     landmarks: cdt.LabeledPoints,
@@ -293,10 +283,11 @@ def align_axes_from_landmarks(
         Tuple of (aligned_surface, aligned_landmarks, transform).
         ``transform`` is a 4x4 homogeneous affine that maps input-frame
         points into CTF; apply as ``hom = transform @ [x, y, z, 1]``.
-    """
-    import trimesh
-    from cedalion.geometry.landmarks import normalize_landmarks_labels
 
+    Raises:
+        ValueError: If any of the required landmarks (Nz, Iz, Cz, LPA, RPA)
+            are missing after label normalization.
+    """
     landmarks = normalize_landmarks_labels(landmarks)
     lm = landmarks.pint.dequantify().values
     labels = list(landmarks["label"].values)
@@ -311,7 +302,7 @@ def align_axes_from_landmarks(
     Cz = lm[idx["Cz"]]
     Lpa = lm[idx["LPA"]]
     Rpa = lm[idx["RPA"]]
-    origin = 0.5 * (Lpa + Rpa)
+    origin = _ear_midpoint(Lpa, Rpa)
 
     y_ax = Lpa - Rpa
     y_ax = y_ax / np.linalg.norm(y_ax)
@@ -324,8 +315,6 @@ def align_axes_from_landmarks(
 
     if np.dot(Cz - origin, z_ax) < 0:
         z_ax = -z_ax
-    if np.dot(Nz - origin, x_ax) < 0:
-        x_ax = -x_ax
     y_ax = np.cross(z_ax, x_ax)
 
     R = np.vstack([x_ax, y_ax, z_ax])
@@ -333,29 +322,24 @@ def align_axes_from_landmarks(
     M[:3, :3] = R
     M[:3, 3] = -R @ origin
 
-    aligned_verts = (np.asarray(surface.mesh.vertices) - origin) @ R.T
-    new_mesh = trimesh.Trimesh(
+    aligned_verts = _apply_affine(np.asarray(surface.mesh.vertices), M)
+    new_mesh = _rebuild_mesh(
+        surface.mesh,
         vertices=aligned_verts,
         faces=surface.mesh.faces,
-        process=False,
     )
-    _copy_visual(surface.mesh, new_mesh)
     aligned_surface = cdc.TrimeshSurface(
         new_mesh, crs="ctf", units=surface.units,
     )
 
-    aligned_lm = (lm - origin) @ R.T
-    old_crs_dim = [d for d in landmarks.dims if d != "label"][0]
-    aligned_landmarks = (
-        landmarks.pint.dequantify()
-        .copy(data=aligned_lm)
-        .rename({old_crs_dim: "ctf"})
-        .pint.quantify()
+    aligned_landmarks = _transform_labeled_points(
+        landmarks, lambda p: _apply_affine(p, M), "ctf"
     )
 
     return aligned_surface, aligned_landmarks, M
 
 
+@cdc.validate_schemas
 def revert_to_einstar_frame(
     surface: cdc.TrimeshSurface,
     landmarks: cdt.LabeledPoints,
@@ -364,16 +348,12 @@ def revert_to_einstar_frame(
 ) -> tuple[cdc.TrimeshSurface, cdt.LabeledPoints]:
     """Map an aligned surface and landmarks back into the raw Einstar frame.
 
-    Inverse of the ``normalize_axes`` then ``align_axes_from_landmarks``
-    composition, so the returned mesh and landmarks carry ``crs="digitized"``
-    and match the coordinates of the original ``read_einstar_obj`` output.
-    Useful right before ``save_anonymized_scan`` when the downstream
-    co-registration pipeline expects the saved ``.obj`` and ``.tsv`` in the
-    native scanner frame (e.g. Elsa's tutorial step 5.2 workflow, whose
-    example files carry ``crs=digitized``).
+    Inverse of ``normalize_axes`` composed with ``align_axes_from_landmarks``,
+    so the returned mesh and landmarks carry ``crs="digitized"`` and match
+    the original ``read_einstar_obj`` output.
 
     Note that ``isolate_head`` is not invertible: the returned mesh is still
-    head-only even though its coordinates are in the original digitized frame.
+    head-only even though its coordinates are in the digitized frame.
 
     Args:
         surface: TrimeshSurface in the CTF frame (post
@@ -386,35 +366,23 @@ def revert_to_einstar_frame(
         Tuple of (surface_digitized, landmarks_digitized). Both carry
         ``crs="digitized"`` and the mesh preserves UVs / vertex colors.
     """
-    import trimesh
-
     M_inv = np.linalg.inv(M_align)
-    R_inv = R_normalize.T
+    R_inv4 = np.eye(4)
+    R_inv4[:3, :3] = R_normalize.T
+    M_total = R_inv4 @ M_inv
 
-    ctf_verts = np.asarray(surface.mesh.vertices)
-    norm_verts = ctf_verts @ M_inv[:3, :3].T + M_inv[:3, 3]
-    raw_verts = norm_verts @ R_inv.T
-
-    new_mesh = trimesh.Trimesh(
+    raw_verts = _apply_affine(np.asarray(surface.mesh.vertices), M_total)
+    new_mesh = _rebuild_mesh(
+        surface.mesh,
         vertices=raw_verts,
         faces=surface.mesh.faces,
-        process=False,
     )
-    _copy_visual(surface.mesh, new_mesh)
     raw_surface = cdc.TrimeshSurface(
         new_mesh, crs="digitized", units=surface.units,
     )
 
-    lm_ctf = landmarks.pint.dequantify().values
-    lm_norm = lm_ctf @ M_inv[:3, :3].T + M_inv[:3, 3]
-    lm_raw = lm_norm @ R_inv.T
-
-    old_crs_dim = [d for d in landmarks.dims if d != "label"][0]
-    raw_landmarks = (
-        landmarks.pint.dequantify()
-        .copy(data=lm_raw)
-        .rename({old_crs_dim: "digitized"})
-        .pint.quantify()
+    raw_landmarks = _transform_labeled_points(
+        landmarks, lambda p: _apply_affine(p, M_total), "digitized"
     )
 
     return raw_surface, raw_landmarks

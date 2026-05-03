@@ -1,39 +1,38 @@
 """Face anonymization module for photogrammetry scans.
 
-This module provides tools to anonymize facial regions in 3D photogrammetry
-scans while preserving optode positions and anatomical landmarks for fNIRS
-research. The anonymization complies with GDPR requirements while maintaining
-scientific utility.
+Anonymizes facial regions in 3D photogrammetry scans while preserving
+optode positions and anatomical landmarks for fNIRS research.
 
-The pipeline works as follows:
-
-1. User picks the 5 landmarks (Nz, Iz, Cz, LPA, RPA) via the upstream
-   ``cedalion.vis.blocks.plot_surface(pick_landmarks=True)`` picker.
-2. Normalize axes so Y=anterior, Z=left (``preprocessing``).
-3. Isolate the head and remove disconnected fragments (``preprocessing``).
-4. Align the full frame from the 5 landmarks (``preprocessing``).
-5. Detect the cap boundary, build the deletion mask, and delete the masked
-   vertices (``mask``).
-6. Optionally revert the aligned surface and landmarks back to the raw
-   Einstar frame via ``revert_to_einstar_frame`` so the saved files carry
-   ``crs="digitized"`` and match the co-registration tutorial's input
-   convention (``read_einstar_obj`` output).
-7. Save the anonymized mesh (``.obj``) and the landmarks (``.tsv``) via
-   ``save_anonymized_scan(surface, out_path, landmarks=...)``. The TSV is
-   what the co-registration tutorial loads at step 5.2.
+The canonical entry point is :func:`anonymize_scan`. Pass it a raw
+Einstar surface and the 5 landmarks (Nz, Iz, Cz, LPA, RPA) and it returns
+the anonymized surface plus landmarks, ready for
+:func:`save_anonymized_scan`.
 
 Example:
     >>> from cedalion.geometry.photogrammetry.anonymization import (
-    ...     normalize_axes, isolate_head, align_axes_from_landmarks,
-    ...     detect_cap_boundary, face_mask_from_landmarks,
-    ...     delete_masked_vertices,
+    ...     anonymize_scan, save_anonymized_scan,
     ... )
-    >>> surface, nz, R = normalize_axes(surface, landmarks.sel(label='Nz'))
-    >>> surface, _ = isolate_head(surface, nz)
-    >>> surface, landmarks, R = align_axes_from_landmarks(surface, landmarks)
+    >>> surface_anon, landmarks_anon = anonymize_scan(surface, landmarks)
+    >>> save_anonymized_scan(surface_anon, "out.obj", landmarks=landmarks_anon)
 
-Initial Contributors:
-    - Face Anonymization Project | 2024
+The pipeline ``anonymize_scan`` runs internally is:
+
+1. :func:`normalize_axes` — rotate around X so Y points anterior.
+2. :func:`isolate_head` — strip body, shoulders, and disconnected
+   fragments.
+3. :func:`align_axes_from_landmarks` — map into the CTF frame.
+4. :func:`detect_cap_boundary` — find the cap front edge along Z.
+5. :func:`face_mask_from_landmarks` — face region + ear spheres, clamped
+   below the cap.
+6. Preserve small spheres around each landmark and a midline nasion strip.
+7. :func:`delete_masked_vertices` — drop triangles touching any masked
+   vertex.
+8. :func:`revert_to_einstar_frame` — return to ``crs="digitized"`` so the
+   output matches :func:`cedalion.io.read_einstar_obj`.
+
+Each of those functions is also exported so callers that need to inspect
+or override an intermediate step can do so without re-implementing the
+whole pipeline.
 """
 
 from .preprocessing import (
@@ -48,9 +47,12 @@ from .mask import (
     delete_masked_vertices,
     save_anonymized_scan,
 )
+from .pipeline import anonymize_scan
 
 
 __all__ = [
+    # Top-level orchestrator (canonical entry point)
+    "anonymize_scan",
     # Preprocessing (axis normalization, head isolation, full alignment,
     # and the inverse mapping back to the raw Einstar frame)
     "normalize_axes",
