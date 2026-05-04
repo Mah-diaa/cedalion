@@ -1,3 +1,4 @@
+"""Two-surface head model and standard atlas loading for DOT forward modelling."""
 
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import scipy.sparse
 import trimesh
 import xarray as xr
 from scipy.spatial import KDTree
+import gzip
 
 import cedalion
 import cedalion.data
@@ -332,9 +334,8 @@ class TwoSurfaceHeadModel:
         )
 
         if voxel_to_vertex_mapping_file_brain is not None:
-            voxel_to_vertex_brain = scipy.sparse.load_npz(
-                voxel_to_vertex_mapping_file_brain
-            )
+            with gzip.GzipFile(voxel_to_vertex_mapping_file_brain) as fin:
+                voxel_to_vertex_brain = scipy.io.mmread(fin)
         else:
             voxel_to_vertex_brain = map_segmentation_mask_to_surface(
                 brain_mask, t_ijk2ras, brain_ijk.apply_transform(t_ijk2ras)
@@ -373,7 +374,8 @@ class TwoSurfaceHeadModel:
             f"units: {self.brain.units}\n"
             f"  scalp faces: {self.scalp.nfaces} vertices: {self.scalp.nvertices} "
             f"units: {self.scalp.units}\n"
-            f"  landmarks: {len(self.landmarks)}\n"
+            "  landmarks: "
+            f"{len(self.landmarks) if self.landmarks is not None else 'None'}\n"
             ")"
         )
 
@@ -439,7 +441,6 @@ class TwoSurfaceHeadModel:
                 os.path.join(foldername, "landmarks.nc")
             )
         self.t_ijk2ras.to_netcdf(os.path.join(foldername, "t_ijk2ras.nc"))
-        self.t_ras2ijk.to_netcdf(os.path.join(foldername, "t_ras2ijk.nc"))
         scipy.sparse.save_npz(os.path.join(foldername, "voxel_to_vertex_brain.npz"),
                                            self.voxel_to_vertex_brain)
         scipy.sparse.save_npz(os.path.join(foldername, "voxel_to_vertex_scalp.npz"),
@@ -459,7 +460,7 @@ class TwoSurfaceHeadModel:
 
         # Check if all files exist
         for fn in ["segmentation_masks.nc", "brain.ply", "scalp.ply",
-                   "t_ijk2ras.nc", "t_ras2ijk.nc", "voxel_to_vertex_brain.npz",
+                   "t_ijk2ras.nc", "voxel_to_vertex_brain.npz",
                    "voxel_to_vertex_scalp.npz"]:
             if not os.path.exists(os.path.join(foldername, fn)):
                 raise ValueError("%s does not exist." % os.path.join(foldername, fn))
@@ -485,7 +486,6 @@ class TwoSurfaceHeadModel:
         else:
             landmarks_ijk = None
         t_ijk2ras = xr.load_dataarray(os.path.join(foldername, 't_ijk2ras.nc'))
-        t_ras2ijk = xr.load_dataarray(os.path.join(foldername, 't_ras2ijk.nc'))
         voxel_to_vertex_brain = scipy.sparse.load_npz(os.path.join(foldername,
                                                      'voxel_to_vertex_brain.npz'))
         voxel_to_vertex_scalp = scipy.sparse.load_npz(os.path.join(foldername,
@@ -627,14 +627,39 @@ class TwoSurfaceHeadModel:
 
     def scale_to_landmarks(
         self,
-        target_landmarks : cdt.LabeledPoints
+        target_landmarks : cdt.LabeledPoints,
+        mode = "general",
     ) -> "TwoSurfaceHeadModel":
+        """Scale the head model to match a set of anatomical landmarks.
+
+        Computes a general affine transform that maps the head model's RAS
+        landmarks to ``target_landmarks`` and applies it to both surfaces
+        and the stored affine transforms.
+
+        Args:
+            target_landmarks: Target landmark positions (e.g. from a digitizer)
+                in any CRS.  Must contain the same label subset as the model's
+                landmarks.
+            mode: method to derive the affine transform. Could be either
+                'trans_rot_isoscale' or 'general'. See cedalion.geometry.registraion
+                for details.
+
+        Returns:
+            New :class:`TwoSurfaceHeadModel` scaled and aligned to
+            ``target_landmarks``.
+        """
         if self.crs == "ijk":
             landmarks_ras = self.landmarks.points.apply_transform(self.t_ijk2ras)
         else:
             landmarks_ras = self.landmarks
 
-        t_ras2scaled = register_general_affine(target_landmarks, landmarks_ras)
+        if mode == "trans_rot_isoscale":
+            t_ras2scaled = register_trans_rot_isoscale(target_landmarks, landmarks_ras)
+        elif mode == "general":
+            t_ras2scaled = register_general_affine(target_landmarks, landmarks_ras)
+        else:
+            raise ValueError(f"unexpected mode '{mode}'")
+
 
         t_ijk2scaled = t_ras2scaled @ self.t_ijk2ras
         t_scaled2ijk = xrutils.pinv(t_ijk2scaled)
@@ -654,6 +679,19 @@ class TwoSurfaceHeadModel:
     def scale_to_headsize(
         self, circumference: cdt.QLength, nz_cz_iz: cdt.QLength, lpa_cz_rpa: cdt.QLength
     ) -> "TwoSurfaceHeadModel":
+        """Scale the head model to match anthropometric head-size measurements.
+
+        Fits a tri-axial ellipsoid model to the three measurements, derives
+        corresponding landmark positions, and delegates to :meth:`scale_to_landmarks`.
+
+        Args:
+            circumference: Head circumference.
+            nz_cz_iz: Nasion–Cz–Inion arc length.
+            lpa_cz_rpa: Left preauricular–Cz–right preauricular arc length.
+
+        Returns:
+            New :class:`TwoSurfaceHeadModel` scaled to the specified head size.
+        """
         ellipsoid_landmarks = get_landmarks_for_headsize(
             circumference, nz_cz_iz, lpa_cz_rpa
         )
@@ -662,6 +700,16 @@ class TwoSurfaceHeadModel:
 
 
     def get_brain_mni152_coords(self) -> xr.DataArray:
+        """Return MNI152 vertex coordinates of the brain surface.
+
+        Returns:
+            xr.DataArray with dimensions ``(label, mni152)`` containing the
+            ``mni152_r``, ``mni152_a``, and ``mni152_s`` vertex coordinates.
+
+        Raises:
+            ValueError: If the brain surface does not have ``mni152_r/a/s``
+                vertex coordinates (i.e. not a standard atlas head model).
+        """
         v = self.brain.vertices
         if not all([f"mni152_{i}" in v.coords for i in ["r", "a", "s"]]):
             return ValueError("The cortex surface has no mni vertex coordinates")
@@ -740,3 +788,35 @@ def get_standard_headmodel(model : str) -> TwoSurfaceHeadModel:
 
     return head_ijk
 
+
+@lru_cache
+def get_inflated_cortex_surface(model : str) -> cdc.TrimeshSurface:
+    """Load the inflated cortex surface for a standard atlas head model.
+
+    The result is cached after the first call.
+
+    Args:
+        model: Atlas name — one of ``"colin27"`` or ``"icbm152"``.
+
+    Returns:
+        :class:`~cedalion.dataclasses.TrimeshSurface` in the ``"inflated"`` CRS.
+
+    Raises:
+        ValueError: If ``model`` is not one of the supported atlases.
+    """
+    AVAILABLE_MODELS = ["colin27", "icbm152"]
+
+    if model == "colin27":
+        f = cedalion.data.get_colin27_headmodel_files()
+    elif model == "icbm152":
+        f = cedalion.data.get_icbm152_headmodel_files()
+    else:
+        raise ValueError(
+            "Unknown head model. Available models are: " + ", ".join(AVAILABLE_MODELS)
+        )
+
+    return cdc.TrimeshSurface(
+        trimesh.load(f.basedir / "cortex_pial_inflated.obj"),
+        crs="inflated",
+        units=cedalion.units(None).units,
+    )

@@ -9,6 +9,7 @@ import xarray as xr
 import pyvista as pv
 
 import cedalion.vis.blocks as vbx
+from cedalion import cite
 
 from cedalion.dataclasses import (
     Surface,
@@ -41,10 +42,12 @@ def normalize_landmarks_labels(geo3d: LabeledPoints) -> LabeledPoints:
         return geo3d
 
     label_mapping = {
-        "Nz": {"nz", "nasion", "nas"},
+        "Nz": {"nz", "nasion", "nas", "nasion fid-anchor"},
         "Iz": {"iz", "inion", "ini"},
-        "LPA": {"lpa", "lpa_l", "left ear", "le", "left", "l"},
-        "RPA": {"rpa", "rpa_r", "right ear", "re", "right", "r"},
+        "LPA": {"lpa", "lpa_l", "left ear", "le", "left", "l", "al",
+                "lpa fid-anchor"},
+        "RPA": {"rpa", "rpa_r", "right ear", "re", "right", "r", "ar",
+                "rpa fid-anchor"},
         "Cz": {"cz", "vertex"},
     }
 
@@ -194,6 +197,7 @@ class LandmarksBuilder1010:
             scalp_surface (Surface): a triangle-mesh representing the scalp
             landmarks (LabeledPoints): positions of "Nz", "Iz", "LPA", "RPA"
         """
+        cite("Oostenveld2001")
         if isinstance(scalp_surface, TrimeshSurface):
             scalp_surface = VTKSurface.from_trimeshsurface(scalp_surface)
 

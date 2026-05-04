@@ -134,7 +134,7 @@ def plot_surface(
     surface: cdc.Surface,
     color: pv.ColorLike | ArrayLike |  None = None,
     opacity : float =1.0,
-    pick_landmarks : bool = False,
+    pick_landmarks : list[str] | bool = False,
     **kwargs,
 ):
     #used for picking landmarks in photogrammetry example
@@ -146,8 +146,10 @@ def plot_surface(
         color: Color of the mesh.
         opacity: Opacity of the mesh, ranging from 0 (transparent) to 1
             (opaque). Default is 1.0.
-        pick_landmarks: If True, enables interactive picking of landmarks on the
-            surface. Default is False.
+        pick_landmarks: If True, enables interactive picking of landmarks
+            ('Nz', 'Iz', 'Cz', 'Lpa', 'Rpa') on the surface. If a list of
+            strings is provided, these are used as the landmark labels instead.
+            Default is False.
         **kwargs: Additional keyword arguments are passed to pv.add_mesh.
 
     Returns:
@@ -211,13 +213,22 @@ def plot_surface(
 
     if "pickable" not in kwargs:
         kwargs["pickable"] = True
+    if "smooth_shading" not in kwargs:
+        kwargs["smooth_shading"] = True
+    if "split_sharp_edges" not in kwargs:
+        kwargs["split_sharp_edges"] = True
+    if "feature_angle" not in kwargs:
+        kwargs["feature_angle"] = 90
 
-    plotter.add_mesh(mesh, color=color, rgb=rgb, opacity=opacity, smooth_shading=True,
-                     **kwargs)
+    plotter.add_mesh(mesh, color=color, rgb=rgb, opacity=opacity, **kwargs)
 
 
     # Define landmark labels
-    landmark_labels = ['Nz', 'Iz', 'Cz', 'Lpa', 'Rpa']
+    if isinstance(pick_landmarks, bool):
+        landmark_labels = ['Nz', 'Iz', 'Cz', 'Lpa', 'Rpa']
+    else:
+        landmark_labels = pick_landmarks
+        pick_landmarks = True
     picked_points = []
     labels = []
     point_actors = []
@@ -256,10 +267,10 @@ def plot_surface(
 
         # If no point is close enough, create a new point and assign a label
         # Check if there are already 5 points placed
-        if len(picked_points) >= 5:
+        if len(picked_points) >= len(landmark_labels):
             return
 
-        landmark_label = landmark_labels[0]
+        landmark_label = landmark_labels[(len(picked_points) % len(landmark_labels))]
         # Add new point and label actors
         point_actor = plotter.add_mesh(pv.Sphere(radius=3, center=new_point),
                                        color='green', smooth_shading=True)
@@ -276,16 +287,27 @@ def plot_surface(
 
     if pick_landmarks is True:
         def get_points_and_labels():
-
-            if len(labels) < 5:
+            if len(labels) < len(landmark_labels):
                 print("Warning: Some labels are missing")
-            elif len(set(labels)) != 5:
+            elif len(set(labels)) != len(landmark_labels):
                 print("Warning: Some labels are repeated!")
-            return picked_points, labels
+
+            landmarks = xr.DataArray(
+                    np.vstack(picked_points),
+                    dims=["label", "digitized"],
+                    coords={
+                        "label": ("label", labels),
+                        "type": ("label", [cdc.PointType.LANDMARK]*len(labels)),
+                        "group": ("label", ["L"]*len(labels)),
+                        },
+                ).pint.quantify("mm")
+            return landmarks
 
         plotter.enable_surface_point_picking(
             callback=place_landmark,
-            show_message="Right click to place or change the landmark label",
+            show_message="Right click to place or change the landmark label.\n" \
+                         "Expected labels: "+str(landmark_labels)+"\n" \
+                         "Close window when done.",
             show_point=False,
             tolerance=0.005,
         )
@@ -301,6 +323,7 @@ def plot_labeled_points(
     show_labels: bool = False,
     ppoints: bool = None,
     labels: list[str] | None = None,
+    meas_list: xr.DataArray | None = None,
 ):
     #used in selecting optode centers in Photogrammetry example.
     """Plots `LabeledPoints` with optional interaction for picking points.
@@ -319,6 +342,8 @@ def plot_labeled_points(
         ppoints: A list to store indices of picked points, enables picking if not None.
         labels: List of labels to show if `show_labels` is True. If None and
             `show_labels` is True, the labels from `points` are used.
+        meas_list: A DataArray containing channel information for plotting
+            channels as lines between sources and detectors.
 
     Initial Contributors:
         - Eike Middell | middell@tu-berlin.de | 2024
@@ -365,7 +390,11 @@ def plot_labeled_points(
     # Iterate through each point and its corresponding label
     for i_point, point in enumerate(points):
         # Determine the point type
-        point_type = point.coords['type'].item()
+        if 'type' in point.coords:
+            point_type = point.coords['type'].item()
+        else:
+            point_type = PointType.UNKNOWN
+
         # Create and add a sphere at the point's coordinates
         s = pv.Sphere(radius=default_point_sizes[point_type], center=point.values)
         plotter.add_mesh(
@@ -374,6 +403,31 @@ def plot_labeled_points(
         # Add the label if required
         if show_labels and labels is not None:
             plotter.add_point_labels(point.values[np.newaxis], [str(labels[i_point])])
+
+    # If measurement list is provided, plot lines between source and detector points
+    if meas_list is not None:
+        all_points = []
+        connectivity = []
+
+        for s, d in zip(meas_list['source'], meas_list['detector']):
+            src = points.loc[s].values
+            det = points.loc[d].values
+
+            # Add source and detector points to the point list
+            idx_offset = len(all_points)
+            all_points.extend([src, det])
+
+            # Create connectivity array: [2, pt_id0, pt_id1]
+            connectivity.append([2, idx_offset, idx_offset + 1])
+
+        # Create the combined line mesh
+        all_points = np.array(all_points)
+        connectivity = np.hstack(connectivity)
+        lines = pv.PolyData()
+        lines.points = all_points
+        lines.lines = connectivity
+
+        plotter.add_mesh(lines, color="k", smooth_shading=True, line_width=2.0)
 
     if ppoints is not None:
         plotter.enable_surface_point_picking(callback=on_pick, show_point=False)

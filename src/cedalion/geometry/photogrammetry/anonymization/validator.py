@@ -8,7 +8,7 @@ Initial Contributors:
     - Face Anonymization Project | 2024
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 import numpy as np
@@ -24,6 +24,9 @@ logger = logging.getLogger("cedalion")
 @dataclass
 class ValidationResult:
     """Result of post-anonymization sanity check.
+
+    `summary` and `passed` are derived from the per-check fields in
+    `__post_init__`; callers only set the seven check inputs.
 
     Attributes:
         face_removed: True if vertex count dropped as expected
@@ -47,41 +50,37 @@ class ValidationResult:
     protected_points_preserved: bool
     protected_point_max_delta_mm: float
     face_coverage_pct: float
-    passed: bool
-    summary: str
+    passed: bool = field(init=False)
+    summary: str = field(init=False)
 
-
-def _check_mesh_valid(mesh) -> bool:
-    """Check that a trimesh mesh has no degenerate faces.
-
-    Args:
-        mesh: A trimesh.Trimesh object
-
-    Returns:
-        True if mesh is valid (has faces, <1% degenerate)
-    """
-    if len(mesh.faces) == 0:
-        return False
-
-    # Check for degenerate faces (zero area)
-    # Photogrammetry meshes commonly have a few thin triangles — only
-    # fail if more than 1% of faces are degenerate.
-    areas = mesh.area_faces
-    n_degenerate = int(np.sum(areas < 1e-12))
-    if n_degenerate > 0:
-        pct = 100.0 * n_degenerate / len(mesh.faces)
-        if pct > 1.0:
-            logger.warning(
-                f"Mesh has {n_degenerate} degenerate faces ({pct:.2f}%)"
+    def __post_init__(self):
+        self.passed = (
+            self.face_removed
+            and self.mesh_valid
+            and self.protected_points_preserved
+        )
+        if self.passed:
+            self.summary = (
+                f"PASSED: {self.actual_vertices_removed:,} vertices removed "
+                f"({self.face_coverage_pct:.1f}%), mesh valid, "
+                f"protected points preserved (max |Delta| = 0)"
             )
-            return False
-        else:
-            logger.info(
-                f"Mesh has {n_degenerate} degenerate faces ({pct:.4f}%) "
-                f"— within tolerance for photogrammetry scans"
+            return
+        issues = []
+        if not self.face_removed:
+            issues.append(
+                f"vertex removal mismatch (expected ~"
+                f"{self.expected_vertices_removed}, got "
+                f"{self.actual_vertices_removed})"
             )
-
-    return True
+        if not self.mesh_valid:
+            issues.append("mesh has degenerate faces")
+        if not self.protected_points_preserved:
+            issues.append(
+                f"protected point shifted: max |Delta| = "
+                f"{self.protected_point_max_delta_mm:.3e} mm"
+            )
+        self.summary = f"FAILED: {'; '.join(issues)}"
 
 
 def _check_protected_points(
@@ -160,65 +159,39 @@ def validate_anonymization(
     Returns:
         ValidationResult with pass/fail and diagnostic info
     """
-    # Check 1: Face removed — vertex count dropped
     orig_count = len(original_surface.mesh.vertices)
-    anon_count = len(anonymized_surface.mesh.vertices)
     expected_removed = int(facial_mask.sum())
-    actual_removed = orig_count - anon_count
-    face_coverage_pct = 100.0 * expected_removed / orig_count if orig_count > 0 else 0.0
-
-    # Allow some tolerance: boundary vertices may also be removed
+    actual_removed = orig_count - len(anonymized_surface.mesh.vertices)
+    # Boundary vertices may also be removed, so allow 10% slack.
     face_removed = actual_removed >= expected_removed * 0.9
-
     if not face_removed:
         logger.warning(
             f"Expected ~{expected_removed} vertices removed, "
             f"but only {actual_removed} were removed"
         )
 
-    # Check 2: Mesh valid
-    mesh_valid = _check_mesh_valid(anonymized_surface.mesh)
+    # Photogrammetry meshes commonly have a few thin triangles; only fail
+    # when degenerate faces exceed 1% of the total.
+    mesh = anonymized_surface.mesh
+    n_degenerate = int(np.sum(mesh.area_faces < 1e-12))
+    pct_degenerate = 100.0 * n_degenerate / len(mesh.faces)
+    mesh_valid = len(mesh.faces) > 0 and pct_degenerate <= 1.0
+    if n_degenerate > 0:
+        log = logger.warning if not mesh_valid else logger.info
+        log(f"Mesh has {n_degenerate} degenerate faces ({pct_degenerate:.4f}%)")
 
-    # Check 3: Protected-point preservation (Delta = d_anon - d_orig == 0)
     points_preserved, max_delta = _check_protected_points(
         original_surface, anonymized_surface, protected_points
     )
 
-    # Overall pass/fail
-    passed = face_removed and mesh_valid and points_preserved
-
-    # Build summary
-    if passed:
-        summary = (
-            f"PASSED — {actual_removed:,} vertices removed "
-            f"({face_coverage_pct:.1f}%), mesh valid, "
-            f"protected points preserved (max |Delta| = 0)"
-        )
-    else:
-        issues = []
-        if not face_removed:
-            issues.append(
-                f"vertex removal mismatch "
-                f"(expected ~{expected_removed}, got {actual_removed})"
-            )
-        if not mesh_valid:
-            issues.append("mesh has degenerate faces")
-        if not points_preserved:
-            issues.append(
-                f"protected point shifted: max |Delta| = {max_delta:.3e} mm"
-            )
-        summary = f"FAILED — {'; '.join(issues)}"
-
-    logger.info(f"Anonymization validation: {summary}")
-
-    return ValidationResult(
+    result = ValidationResult(
         face_removed=face_removed,
         mesh_valid=mesh_valid,
         expected_vertices_removed=expected_removed,
         actual_vertices_removed=actual_removed,
         protected_points_preserved=points_preserved,
         protected_point_max_delta_mm=max_delta,
-        face_coverage_pct=face_coverage_pct,
-        passed=passed,
-        summary=summary,
+        face_coverage_pct=100.0 * expected_removed / orig_count,
     )
+    logger.info(f"Anonymization validation: {result.summary}")
+    return result

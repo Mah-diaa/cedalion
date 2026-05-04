@@ -11,16 +11,22 @@ applies it to the mesh:
 
 All mask math assumes the CTF frame: +X=anterior, +Y=left, +Z=up, origin
 at the LPA-RPA midpoint (see ``align_axes_from_landmarks``).
-
-Initial Contributors:
-    - Face Anonymization Project | 2024
 """
 
 import logging
+import os
 
 import numpy as np
+import trimesh
+from PIL import Image, ImageDraw, ImageFilter
+from scipy.signal import savgol_filter
 
 import cedalion.dataclasses as cdc
+import cedalion.typing as cdt
+from cedalion.io import export_to_tsv
+
+from ._utils import _ear_midpoint, _reindex_faces, _resolve_texture_image
+from .preprocessing import _rebuild_mesh
 
 logger = logging.getLogger("cedalion")
 
@@ -29,8 +35,8 @@ def detect_cap_boundary(
     verts: np.ndarray,
     Nz: np.ndarray,
     Cz: np.ndarray,
-    ear_mid: np.ndarray,
-    mid_y: float,
+    Lpa: np.ndarray,
+    Rpa: np.ndarray,
     band_width: float = 15.0,
     bin_size: float = 1.0,
     foot_grad_threshold: float = 0.2,
@@ -40,17 +46,15 @@ def detect_cap_boundary(
     """Find the Z height where the EEG cap front edge sits.
 
     Scans upward from Nz along the midline and records max-X per Z-bin. The
-    cap protrudes in +X (anterior), so X-max along the midline lives on the
-    cap. The cap edge is the foot of the steep rise leading to the peak:
-    walk back from the peak until the smoothed gradient drops below
-    ``foot_grad_threshold``.
+    cap protrudes anteriorly, so X-max on the midline traces the cap. The
+    cap edge is the foot of the rise leading to the peak: walk back from the
+    peak until the smoothed gradient drops below ``foot_grad_threshold``.
 
-    Failsafe for flush / no-optode caps: when the cap sits flat against
-    the head (no optodes), the anterior bump vanishes and the X-max
-    profile is roughly monotonic up to ``Cz``, leaving ``cap_z`` stuck
-    near the crown. If the detected ``cap_z`` exceeds
-    ``Nz[2] + cap_z_ceiling_mm``, fall back to a fixed cut at
-    ``Nz[2] + eyebrow_offset_mm`` (just above the supraorbital ridge).
+    Failsafe for flush / no-optode caps: when the cap sits flat against the
+    head, the anterior bump vanishes and X-max is roughly monotonic up to
+    ``Cz``, stranding ``cap_z`` near the crown. If detection lands above
+    ``Nz[2] + cap_z_ceiling_mm``, fall back to ``Nz[2] + eyebrow_offset_mm``
+    (just above the supraorbital ridge).
 
     Expects the CTF frame (+X=anterior, +Y=left, +Z=up).
 
@@ -58,8 +62,8 @@ def detect_cap_boundary(
         verts: Mesh vertices, shape (N, 3).
         Nz: Nasion position.
         Cz: Cz position.
-        ear_mid: Midpoint of Lpa/Rpa.
-        mid_y: Midline Y value (e.g. ``0.5 * (Lpa[1] + Rpa[1])``).
+        Lpa: Left preauricular position.
+        Rpa: Right preauricular position.
         band_width: Y-band half-width for the midline X-profile (mm).
         bin_size: Z-bin size for the X-profile (mm).
         foot_grad_threshold: dX/dZ below this value marks the foot of the rise.
@@ -71,8 +75,8 @@ def detect_cap_boundary(
     Returns:
         Tuple of (cap_z, profile_z, profile_x_raw, profile_x_smooth).
     """
-    from scipy.signal import savgol_filter
-
+    ear_mid = _ear_midpoint(Lpa, Rpa)
+    mid_y = ear_mid[1]
     in_band = np.abs(verts[:, 1] - mid_y) < band_width
     above_nz = verts[:, 2] > Nz[2]
     anterior = verts[:, 0] > ear_mid[0]
@@ -96,7 +100,6 @@ def detect_cap_boundary(
     xv = max_x[valid]
 
     win = min(11, len(xv) if len(xv) % 2 == 1 else len(xv) - 1)
-    win = max(win, 5)
     xv_s = savgol_filter(xv, window_length=win, polyorder=2)
 
     peak_idx = int(np.argmax(xv_s))
@@ -123,14 +126,12 @@ def detect_cap_boundary(
 def face_mask_from_landmarks(
     verts: np.ndarray,
     Nz: np.ndarray,
-    Iz: np.ndarray,
-    Cz: np.ndarray,
     Lpa: np.ndarray,
     Rpa: np.ndarray,
     cap_z: float | None = None,
     ear_delete_radius: float = 40.0,
 ) -> tuple[np.ndarray, dict]:
-    """Build face + ear deletion mask from the 5 landmarks (CTF frame).
+    """Build face + ear deletion mask from the landmarks (CTF frame).
 
     Mask is the union of two regions, both clamped below the cap boundary:
 
@@ -141,7 +142,9 @@ def face_mask_from_landmarks(
 
     Args:
         verts: Mesh vertices, shape (N, 3).
-        Nz, Iz, Cz, Lpa, Rpa: 5 landmark positions in the CTF frame.
+        Nz: Nasion position in the CTF frame.
+        Lpa: Left preauricular position in the CTF frame.
+        Rpa: Right preauricular position in the CTF frame.
         cap_z: Upper bound Z value (typically from ``detect_cap_boundary``).
             Defaults to Nz[2] if not provided.
         ear_delete_radius: Sphere radius around Lpa/Rpa in mm.
@@ -151,7 +154,7 @@ def face_mask_from_landmarks(
         ``info`` has keys ``upper_bound``, ``ear_mid``, and ``counts``
         (per-region vertex counts).
     """
-    ear_mid = 0.5 * (Lpa + Rpa)
+    ear_mid = _ear_midpoint(Lpa, Rpa)
     upper_bound = cap_z if cap_z is not None else Nz[2]
 
     below_cap = verts[:, 2] < upper_bound
@@ -177,16 +180,16 @@ def face_mask_from_landmarks(
     return mask, info
 
 
+@cdc.validate_schemas
 def delete_masked_vertices(
     surface: cdc.TrimeshSurface,
     mask: np.ndarray,
 ) -> cdc.TrimeshSurface:
     """Drop triangles touching any masked vertex and strip unreferenced vertices.
 
-    Reindexes ``mesh.visual.uv`` (if present) in lockstep with the vertex array.
-    Trimesh's ``remove_unreferenced_vertices`` does not touch UV arrays, so a
-    naive call leaves ``len(uv) != len(vertices)`` and any subsequent textured
-    export crashes or corrupts.
+    Reindexes ``mesh.visual.uv`` in lockstep with the vertex array.
+    ``Trimesh.remove_unreferenced_vertices`` does not touch UV arrays, so a
+    naive call leaves ``len(uv) != len(vertices)`` and breaks textured export.
 
     Args:
         surface: Input TrimeshSurface.
@@ -196,75 +199,48 @@ def delete_masked_vertices(
         New TrimeshSurface with masked vertices (and the faces touching them)
         removed. CRS, units, UVs, and texture image are preserved in sync.
     """
-    import trimesh
-
     old_mesh = surface.mesh
     old_verts = np.asarray(old_mesh.vertices)
     old_faces = np.asarray(old_mesh.faces)
-    n_old_verts = len(old_verts)
 
     kept_face_mask = ~mask[old_faces].any(axis=1)
-    kept_faces = old_faces[kept_face_mask]
-    kept_vidx = np.unique(kept_faces)
-
-    reindex = -np.ones(n_old_verts, dtype=np.int64)
-    reindex[kept_vidx] = np.arange(len(kept_vidx))
-
-    new_mesh = trimesh.Trimesh(
-        vertices=old_verts[kept_vidx],
-        faces=reindex[kept_faces],
-        process=False,
+    new_verts, new_faces, kept_vidx = _reindex_faces(
+        old_verts, old_faces, kept_face_mask
     )
 
-    old_visual = old_mesh.visual
-    uv = getattr(old_visual, "uv", None)
-    if uv is not None and len(uv) == n_old_verts:
-        new_mesh.visual = trimesh.visual.TextureVisuals(
-            uv=np.asarray(uv)[kept_vidx],
-            image=getattr(old_visual, "image", None),
-            material=getattr(old_visual, "material", None),
-        )
-    else:
-        vcol = getattr(old_visual, "vertex_colors", None)
-        if vcol is not None and len(vcol) == n_old_verts:
-            new_mesh.visual.vertex_colors = np.asarray(vcol)[kept_vidx]
+    new_mesh = _rebuild_mesh(
+        old_mesh,
+        vertices=new_verts,
+        faces=new_faces,
+        vertex_index=kept_vidx,
+    )
 
     return cdc.TrimeshSurface(
         mesh=new_mesh, crs=surface.crs, units=surface.units,
     )
 
 
-def _sanitize_texture_from_uv(
-    mesh,
-    fill: tuple[int, int, int] = (0, 0, 0),
-) -> "Image.Image | None":
+def _sanitize_texture_from_uv(mesh: trimesh.Trimesh) -> Image.Image | None:
     """Rebuild the texture image keeping only pixels referenced by mesh UVs.
 
-    Rasterizes every surviving face's UV triangle onto a keep-mask the size
-    of the source image. Pixels outside the mask are set to ``fill`` so
-    face-region pixels (no longer referenced after anonymization) cannot leak
+    Rasterizes every surviving face's UV triangle onto a keep-mask, then
+    blacks out pixels outside the mask so face-region pixels cannot leak
     through the JPG. The mask is dilated by 1 pixel to absorb anti-aliasing
     fringes at triangle boundaries.
 
-    OBJ UVs use the bottom-left origin convention; PIL images use top-left,
-    so V is flipped before rasterizing.
+    OBJ UVs use a bottom-left origin; PIL images use top-left, so V is
+    flipped before rasterizing.
 
     Args:
         mesh: A ``trimesh.Trimesh`` with ``mesh.visual`` as ``TextureVisuals``.
-        fill: RGB fill color for unreferenced pixels.
 
     Returns:
         Sanitized PIL Image in RGB mode, or ``None`` if the mesh has no
         usable texture (caller should fall back to geometry-only output).
     """
-    from PIL import Image, ImageDraw, ImageFilter
-
     visual = mesh.visual
     uv = getattr(visual, "uv", None)
-    image = getattr(visual, "image", None)
-    if image is None:
-        mat = getattr(visual, "material", None)
-        image = getattr(mat, "image", None) if mat is not None else None
+    image = _resolve_texture_image(visual)
 
     if uv is None or image is None or len(uv) != len(mesh.vertices):
         return None
@@ -286,7 +262,7 @@ def _sanitize_texture_from_uv(
 
     out = np.empty_like(img_rgb)
     out[keep] = img_rgb[keep]
-    out[~keep] = fill
+    out[~keep] = (0, 0, 0)
     return Image.fromarray(out, mode="RGB")
 
 
@@ -300,38 +276,34 @@ _MTL_TEMPLATE = (
 )
 
 
+@cdc.validate_schemas
 def save_anonymized_scan(
     surface: cdc.TrimeshSurface,
     out_path: str,
-    landmarks: "xr.DataArray | None" = None,
+    landmarks: cdt.LabeledPoints | None = None,
     strip_texture: bool = False,
 ) -> list[str]:
     """Export an anonymized photogrammetry surface to disk.
 
     Default path (``strip_texture=False``): writes an ``.obj`` + ``.mtl`` +
-    sanitized ``.jpg`` bundle. The JPG is rebuilt from the original texture
-    so it contains colors *only* for UV regions still referenced by the
-    anonymized mesh; every other pixel (notably the face region) is set to
-    the fill color. Opening the JPG alone therefore reveals no face pixels.
+    sanitized ``.jpg`` bundle. The JPG is rebuilt to contain colors *only*
+    for UV regions still referenced by the anonymized mesh; face-region
+    pixels are replaced by the fill color, so opening the JPG alone reveals
+    no face.
 
-    ``strip_texture=True`` is an explicit opt-out that writes only the
-    geometry ``.obj`` (no MTL, no JPG).
+    ``strip_texture=True`` writes geometry only (no MTL, no JPG). Same
+    fallback applies when the input mesh has no usable texture, with a
+    warning.
 
-    If the input mesh has no usable texture (no UVs or no image), falls
-    back to geometry-only output with a warning.
-
-    If ``landmarks`` is provided, also writes ``{stem}_landmarks.tsv`` next to
-    the ``.obj`` using ``cedalion.io.export_to_tsv``. The resulting TSV is
-    the file that gets uploaded at step 5.2 of the cedalion photogrammetry
-    co-registration tutorial.
+    When ``landmarks`` is provided, also writes ``{stem}_landmarks.tsv`` via
+    ``cedalion.io.export_to_tsv`` for downstream co-registration.
 
     Args:
         surface: Anonymized TrimeshSurface (typically output of
             ``delete_masked_vertices``).
         out_path: Destination path ending in ``.obj``.
-        landmarks: Optional LabeledPoints of landmarks (Nz, Iz, LPA, RPA,
-            Cz) to persist alongside the mesh as a TSV. Should be in the same
-            frame as ``surface``.
+        landmarks: LabeledPoints (Nz, Iz, LPA, RPA, Cz) in the same frame
+            as ``surface``, persisted alongside the mesh as a TSV.
         strip_texture: If True, skip the MTL + JPG and write geometry only.
 
     Returns:
@@ -342,9 +314,6 @@ def save_anonymized_scan(
     Raises:
         ValueError: If ``out_path`` does not end in ``.obj``.
     """
-    import os
-    import trimesh
-
     if not out_path.lower().endswith(".obj"):
         raise ValueError(f"out_path must end in .obj, got: {out_path}")
 
@@ -353,6 +322,9 @@ def save_anonymized_scan(
 
     sanitized = None if strip_texture else _sanitize_texture_from_uv(surface.mesh)
 
+    # Bare rebuild: the visual is rewritten below (with the sanitized
+    # texture) or the mesh is exported geometry-only, so we deliberately
+    # skip ``_rebuild_mesh``'s visual-copy step.
     mesh_to_write = trimesh.Trimesh(
         vertices=np.asarray(surface.mesh.vertices),
         faces=np.asarray(surface.mesh.faces),
@@ -396,15 +368,13 @@ def save_anonymized_scan(
         written.append(out_path)
 
     if landmarks is not None:
-        from cedalion.io import export_to_tsv
-
         tsv_path = os.path.join(out_dir, f"{stem}_landmarks.tsv")
         export_to_tsv(tsv_path, landmarks)
         written.append(tsv_path)
     else:
         logger.warning(
             "save_anonymized_scan called without landmarks; "
-            "co-registration (tutorial step 5.2) will need them saved separately."
+            "downstream co-registration will need them saved separately."
         )
 
     logger.info(
@@ -417,10 +387,10 @@ def save_anonymized_scan(
 def _ensure_mtllib(obj_text: str, mtl_name: str) -> str:
     """Guarantee the OBJ references our MTL via ``mtllib`` and ``usemtl``.
 
-    Trimesh's OBJ exporter may or may not emit material lines depending on
-    version; rewrite deterministically so the MTL pairing is stable.
+    Trimesh's OBJ exporter emits material lines inconsistently across
+    versions; rewrite deterministically so the MTL pairing is stable.
     """
     lines = obj_text.splitlines()
-    lines = [l for l in lines if not l.startswith(("mtllib ", "usemtl "))]
+    lines = [line for line in lines if not line.startswith(("mtllib ", "usemtl "))]
     header = [f"mtllib {mtl_name}", "usemtl _texture"]
     return "\n".join(header + lines) + "\n"

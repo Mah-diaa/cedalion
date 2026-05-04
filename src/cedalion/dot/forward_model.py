@@ -11,7 +11,6 @@ directory.
 from __future__ import annotations
 import logging
 import os.path
-import warnings
 import sys
 from pathlib import Path
 from warnings import warn
@@ -23,6 +22,7 @@ import xarray as xr
 
 import cedalion
 import cedalion.dataclasses as cdc
+from cedalion import cite
 
 import cedalion.typing as cdt
 import cedalion.xrutils as xrutils
@@ -259,6 +259,9 @@ class ForwardModel:
 
         """
 
+        cite("Fang2009")
+        cite("Yu2018")
+        cite("Yan2020")
         wavelengths = self.measurement_list.wavelength.unique()
         n_wavelength = len(wavelengths)
         n_optodes = len(self.optode_pos)
@@ -322,6 +325,7 @@ class ForwardModel:
             Communications in numerical methods in engineering 25.6 (2009): 711-732.
         """
 
+        cite("Dehghani2009")
         if self._get_unitinmm() != 1.:
             warn(
                 "The current NIRFASTer implementation assumes a voxel volume of 1mm^3, "
@@ -448,13 +452,21 @@ class ForwardModel:
         fluence_fname: str | Path,
         sensitivity_fname: str | Path,
     ):
-        """Compute sensitivity matrix from fluence.
+        """Compute sensitivity matrix from fluence via the adjoint Monte Carlo method.
+
+        The sensitivity matrix (Jacobian) maps absorption changes in each voxel/vertex
+        to changes in the measured optical density. It is computed using the adjoint
+        Monte Carlo approach (:cite:t:`Boas2005`, :cite:t:`Yao2016`): the fluence
+        from source and detector optodes is multiplied element-wise and projected onto
+        the head surface.
 
         Args:
             fluence_fname : the input hdf5 file to store the fluence
             sensitivity_fname : the output netcdf file for the sensitivity
         """
 
+        cite("Boas2005")
+        cite("Yao2016")
         unique_channels = self.measurement_list[
             ["channel", "source", "detector"]
         ].drop_duplicates()
@@ -486,7 +498,7 @@ class ForwardModel:
                 f_s = fluence_file.get_fluence(r.source, r.wavelength)
                 f_d = fluence_file.get_fluence(r.detector, r.wavelength)
 
-                pertubation = (f_s * f_d).flatten()
+                pertubation = (f_s * f_d).flatten() # shape (nvoxel,)
 
                 normfactor = (
                     fluence_at_optodes.loc[r.source, r.detector, r.wavelength].values
@@ -496,12 +508,20 @@ class ForwardModel:
                 i_wl = wavelengths.index(r.wavelength)
                 i_ch = channels.index(r.channel)
 
-                Adot_brain[i_ch, :, i_wl] = (
-                    pertubation @ self.head_model.voxel_to_vertex_brain / normfactor
-                )
-                Adot_scalp[i_ch, :, i_wl] = (
-                    pertubation @ self.head_model.voxel_to_vertex_scalp / normfactor
-                )
+                if normfactor > 0:
+                    Adot_brain[i_ch, :, i_wl] = (
+                        pertubation @ self.head_model.voxel_to_vertex_brain / normfactor
+                    )
+                    Adot_scalp[i_ch, :, i_wl] = (
+                        pertubation @ self.head_model.voxel_to_vertex_scalp / normfactor
+                    )
+                else:
+                    warn(
+                        f"Observed zero fluence at optodes for channel {r.channel}. "
+                        "Check the montage!"
+                    )
+                    Adot_brain[i_ch, :, i_wl] = 0.
+                    Adot_scalp[i_ch, :, i_wl] = 0.
 
         is_brain = np.zeros((n_brain + n_scalp), dtype=bool)
         is_brain[:n_brain] = True
@@ -520,7 +540,7 @@ class ForwardModel:
         Adot *= np.prod(self._get_voxel_dimensions().to("mm")).magnitude
 
         if self._get_unitinmm() != 1:
-            warnings.warn("voxel size is not 1 mm^3. Check Adot normalization.")
+            warn("voxel size is not 1 mm^3. Check Adot normalization.")
 
         Adot = xr.DataArray(
             Adot.astype(np.float32),
@@ -842,6 +862,18 @@ def apply_inv_sensitivity(
 
 
 def stack_flat_vertex(array: xr.DataArray):
+    """Stack ``chromo`` and ``vertex`` dimensions into a single ``flat_vertex`` dim.
+
+    Args:
+        array: DataArray with ``"chromo"`` and ``"vertex"`` dimensions.
+
+    Returns:
+        DataArray with a new stacked ``"flat_vertex"`` dimension.
+
+    Raises:
+        ValueError: If ``array`` is missing either the ``"chromo"`` or
+            ``"vertex"`` dimension.
+    """
     dims = ("chromo", "vertex")
 
     for dim in dims:
@@ -852,10 +884,30 @@ def stack_flat_vertex(array: xr.DataArray):
 
 
 def unstack_flat_vertex(array: xr.DataArray):
+    """Unstack the ``flat_vertex`` dimension back into ``chromo`` and ``vertex``.
+
+    Args:
+        array: DataArray with a ``"flat_vertex"`` multi-index dimension.
+
+    Returns:
+        DataArray with separate ``"chromo"`` and ``"vertex"`` dimensions.
+    """
     return xrutils.unstack(array, "flat_vertex", ("chromo", "vertex"))
 
 
 def stack_flat_channel(array: xr.DataArray):
+    """Stack ``wavelength`` and ``channel`` dims into a single ``flat_channel`` dim.
+
+    Args:
+        array: DataArray with ``"wavelength"`` and ``"channel"`` dimensions.
+
+    Returns:
+        DataArray with a new stacked ``"flat_channel"`` dimension.
+
+    Raises:
+        ValueError: If ``array`` is missing either the ``"wavelength"`` or
+            ``"channel"`` dimension.
+    """
     dims = ("wavelength", "channel")
 
     for dim in dims:
@@ -866,16 +918,46 @@ def stack_flat_channel(array: xr.DataArray):
 
 
 def unstack_flat_channel(array: xr.DataArray):
+    """Unstack the ``flat_channel`` dimension back into ``wavelength`` and ``channel``.
+
+    Args:
+        array: DataArray with a ``"flat_channel"`` multi-index dimension.
+
+    Returns:
+        DataArray with separate ``"wavelength"`` and ``"channel"`` dimensions.
+    """
     return xrutils.unstack(array, "flat_channel", ("wavelength", "channel"))
 
 
 def image_to_channel_space(
     Adot: xr.DataArray, img: xr.DataArray, spectrum: str | None = None
 ):
-    common_dim = set(Adot.dims) & set (img.dims)
-    assert len(common_dim) == 1
-    common_dim = next(iter(common_dim))
-    assert common_dim == "vertex" # FIXME generalize?
+    """Project an image-space quantity into channel (measurement) space via Adot.
+
+    Performs the forward projection ``y = Adot @ img`` where the shared vertex
+    dimension is contracted.  If ``img`` is in concentration units, the
+    chromophore-stacked sensitivity matrix is used; if it is in absorption
+    units (1/length), the raw Adot is used directly.
+
+    Args:
+        Adot: Sensitivity matrix with a ``"vertex"`` dimension.
+        img: Image DataArray with a ``"vertex"`` dimension.  Must be quantified
+            in either concentration (``"[concentration]"``) or absorption
+            (``"[1/length]"``) units.
+        spectrum: Extinction coefficient spectrum (e.g. ``"prahl"``). Required
+            when ``img`` has concentration units.
+
+    Returns:
+        DataArray in channel space with ``"wavelength"`` and ``"channel"``
+        dimensions.
+
+    Raises:
+        ValueError: If ``img`` has incompatible units or ``spectrum`` is ``None``
+            when concentration units are detected.
+    """
+
+    common_dim = "vertex"
+    assert (common_dim in Adot.dims) and (common_dim in img.dims)
 
     if xrutils.check_units(img, "[concentration]"):
         if spectrum is None:
@@ -892,10 +974,10 @@ def image_to_channel_space(
                 Adot_stacked, img_stacked, dim="flat_vertex"
             )  # FIXME generalize?
         )
-    elif xrutils.check_units(img, "[1/length]"):
+    elif xrutils.check_units(img, "1/[length]"):
         Adot = Adot.pint.quantify()
         img = img.pint.quantify()
 
-        xrutils.contract(Adot_stacked, img_stacked, dim=common_dim)
+        return xrutils.contract(Adot, img, dim=common_dim)
     else:
         raise ValueError("img must be a quantified concentration ")

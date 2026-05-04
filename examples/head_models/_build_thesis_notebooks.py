@@ -1,12 +1,12 @@
-"""Generate thesis Results chapter notebooks 51--57.
+"""Generate the CSV-producing thesis notebooks (64, 65, 68, 69, 70).
 
-Running this script writes seven .ipynb files alongside it. They share the
-helpers in `_thesis_helpers.py` and collectively produce the tables and
-figures referenced in the Results chapter of the thesis.
+Running this script writes five .ipynb files alongside it. They share
+the helpers in `_thesis_helpers.py` and produce the CSV tables cited in
+the Results chapter.
 
-This script is idempotent: re-running it overwrites the notebooks. Any
-manual edits made inside a notebook will be lost on re-run, so edit the
-source cells here, not in the notebook directly.
+The script is idempotent: re-running overwrites the notebooks, so edit
+the source cells here, not the notebook directly. Notebooks 66, 72, 73
+are hand-authored and not generated here.
 """
 
 from __future__ import annotations
@@ -75,20 +75,19 @@ from _thesis_helpers import (
 
 import numpy as np
 import pandas as pd
-import xarray as xr
 
 OUT_DIR = pathlib.Path('thesis_results_out')
 OUT_DIR.mkdir(exist_ok=True)"""
 
 
 # ---------------------------------------------------------------------------
-# 51 Batch validation
+# 64 Batch validation
 # ---------------------------------------------------------------------------
 
-def nb_51_batch_validation() -> dict:
+def nb_64_batch_validation() -> dict:
     return notebook([
         md(
-            "# 51 Batch mesh statistics",
+            "# 64 Batch mesh statistics",
             "Runs the anonymization pipeline on every valid thesis subject "
             "and collects the mesh-level quantities that Chapter 4 actually "
             "needs: vertex and face counts before and after deletion, the "
@@ -99,8 +98,8 @@ def nb_51_batch_validation() -> dict:
             "`_landmarks.tsv` sidecar and are therefore preserved by "
             "construction (the deletion operator does not touch the "
             "landmark array). Optode preservation is the science-relevant "
-            "question and is handled in notebook 55. Face-detectability is "
-            "handled in notebook 56.",
+            "question and is handled in notebook 68. Face-detectability is "
+            "handled in notebook 69.",
             "Output: `thesis_results_out/batch_validation.csv`, which "
             "populates the mesh-statistics table and the mesh-integrity "
             "prose of Chapter 4.",
@@ -177,26 +176,7 @@ def nb_51_batch_validation() -> dict:
             "    df = df.sort_values('subject').reset_index(drop=True)",
             "df",
         ),
-        md(
-            "## 4. Cohort-level numbers for the chapter prose",
-            "The mesh-integrity section cites cohort-level min/max/median "
-            "degenerate-face percentage; the mesh-statistics section cites "
-            "the overall vertex-removal range. Compute both here so the "
-            "thesis text can just quote them.",
-        ),
-        code(
-            "if len(df):",
-            "    print(f'pct_vertices_removed: min={df.pct_vertices_removed.min():.2f}, '",
-            "          f'median={df.pct_vertices_removed.median():.2f}, '",
-            "          f'max={df.pct_vertices_removed.max():.2f}')",
-            "    print(f'degenerate_face_pct: min={df.degenerate_face_pct.min():.4f}, '",
-            "          f'median={df.degenerate_face_pct.median():.4f}, '",
-            "          f'max={df.degenerate_face_pct.max():.4f}')",
-            "    print(f'cap_z_mm: min={df.cap_z_mm.min():.1f}, '",
-            "          f'median={df.cap_z_mm.median():.1f}, '",
-            "          f'max={df.cap_z_mm.max():.1f}')",
-        ),
-        md("## 5. Save CSV"),
+        md("## 4. Save CSV"),
         code(
             "out = OUT_DIR / 'batch_validation.csv'",
             "df.to_csv(out, index=False)",
@@ -206,13 +186,13 @@ def nb_51_batch_validation() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 52 Pairwise landmark distances
+# 65 Pairwise landmark distances
 # ---------------------------------------------------------------------------
 
-def nb_52_pairwise_distances() -> dict:
+def nb_65_pairwise_distances() -> dict:
     return notebook([
         md(
-            "# 52 Pairwise inter-landmark distances",
+            "# 65 Pairwise inter-landmark distances",
             "Deletion preserves every non-masked vertex bit-exact, so the "
             "ten pairwise distances among the five 10-20 landmarks must "
             "match between the original mesh and the anonymized mesh. This "
@@ -294,114 +274,13 @@ def nb_52_pairwise_distances() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 54 Before/after renders
+# 68 Optode co-registration invariance
 # ---------------------------------------------------------------------------
 
-def nb_54_renders() -> dict:
+def nb_68_coreg_invariance() -> dict:
     return notebook([
         md(
-            "# 54 Before/after mesh renders",
-            "Loads the representative subject's original and anonymized "
-            "meshes side by side in an interactive PyVista viewer with "
-            "linked cameras, so rotating one side rotates the other. "
-            "Use this notebook to position the camera at the two angles "
-            "referenced by the thesis hero figure (frontal and "
-            "three-quarter) and export screenshots of each mesh at the "
-            "current camera.",
-            "Targets for `thesis_results_out/`:",
-            "- `hero_original_frontal.png`, `hero_anon_frontal.png`",
-            "- `hero_original_threequarter.png`, `hero_anon_threequarter.png`",
-            "Data-sharing constraint: only one representative subject "
-            "appears in rendered figures; numerical tables cover all seven.",
-        ),
-        code(
-            COMMON_HEADER,
-            "import pyvista as pv",
-            "from cedalion.vtktutils import trimesh_to_vtk_polydata",
-            "",
-            "pv.set_jupyter_backend('server')",
-            "",
-            "HERO_SUBJECT = 17",
-            "GREY = 'lightgrey'",
-        ),
-        md(
-            "## 1. Load both meshes",
-            "`load_raw` returns the original Einstar scan; `load_anon` "
-            "returns the anonymized scan saved by notebook 48. Both are "
-            "in the digitized (raw-scanner) frame, so the camera you set "
-            "in the viewer applies identically to both.",
-        ),
-        code(
-            "surface_orig = load_raw(HERO_SUBJECT)",
-            "surface_anon = load_anon(HERO_SUBJECT)",
-            "",
-            "poly_orig = pv.wrap(trimesh_to_vtk_polydata(surface_orig.mesh))",
-            "poly_anon = pv.wrap(trimesh_to_vtk_polydata(surface_anon.mesh))",
-            "print(f'original: {poly_orig.n_points:,} verts, {poly_orig.n_cells:,} faces')",
-            "print(f'anon:     {poly_anon.n_points:,} verts, {poly_anon.n_cells:,} faces')",
-        ),
-        md(
-            "## 2. Side-by-side viewer (linked cameras)",
-            "Left panel is the original; right panel is the anonymized. "
-            "Cameras are linked, so orbiting either side orbits both. "
-            "Pick your angle here, then move on to the save cells below "
-            "to screenshot each mesh individually at the current view.",
-        ),
-        code(
-            "plotter = pv.Plotter(shape=(1, 2), window_size=(1600, 900), notebook=True)",
-            "",
-            "plotter.subplot(0, 0)",
-            "plotter.add_text('Original', font_size=12)",
-            "plotter.add_mesh(poly_orig, color=GREY, smooth_shading=True)",
-            "plotter.set_background('white')",
-            "",
-            "plotter.subplot(0, 1)",
-            "plotter.add_text('Anonymized', font_size=12)",
-            "plotter.add_mesh(poly_anon, color=GREY, smooth_shading=True)",
-            "plotter.set_background('white')",
-            "",
-            "plotter.link_views()",
-            "plotter.show()",
-        ),
-        md(
-            "## 3. Save helper",
-            "Run this cell once per angle. It grabs the current camera "
-            "from the side-by-side viewer above and renders each mesh "
-            "*alone* (full frame, no subplot) at that camera into its "
-            "own PNG, so the two hero images can be placed side by side "
-            "in the thesis figure without any subplot chrome.",
-            "Set `ANGLE` to either `'frontal'` or `'threequarter'` "
-            "before running.",
-        ),
-        code(
-            "ANGLE = 'frontal'  # or 'threequarter'",
-            "WINDOW = (1200, 1600)",
-            "",
-            "cam = plotter.camera_position",
-            "print('camera_position =', cam)",
-            "",
-            "for tag, poly in (('original', poly_orig), ('anon', poly_anon)):",
-            "    p = pv.Plotter(off_screen=True, window_size=WINDOW)",
-            "    p.add_mesh(poly, color=GREY, smooth_shading=True)",
-            "    p.set_background('white')",
-            "    p.enable_anti_aliasing('ssaa')",
-            "    p.camera_position = cam",
-            "    out = OUT_DIR / f'hero_{tag}_{ANGLE}.png'",
-            "    p.screenshot(str(out))",
-            "    p.close()",
-            "    print(f'wrote {out}')",
-        ),
-    ])
-
-
-# ---------------------------------------------------------------------------
-# 55 Optode co-registration invariance
-# ---------------------------------------------------------------------------
-
-def nb_55_coreg_invariance() -> dict:
-    return notebook([
-        md(
-            "# 55 Optode co-registration invariance",
+            "# 68 Optode co-registration invariance",
             "For each subject, run `ColoredStickerProcessor` independently "
             "on the original and on the anonymized mesh, match the "
             "detected sticker centres between the two runs by nearest "
@@ -444,10 +323,15 @@ def nb_55_coreg_invariance() -> dict:
             "    _, idx = tree.query(a)",
             "    return idx",
         ),
-        md("## 2. Per-subject comparison"),
+        md(
+            "## 2. Per-subject comparison",
+            "Only the optode cohort (S1--S7) carries cap-mounted stickers; "
+            "bare-cap subjects have nothing to detect, so they are skipped.",
+        ),
         code(
+            "from _thesis_helpers import OPTODE_SUBJECTS",
             "rows = []",
-            "for n in SUBJECTS:",
+            "for n in OPTODE_SUBJECTS:",
             "    paths = subject_paths(n)",
             "    if not (paths.raw_exists and paths.anon_exists):",
             "        print(f'skipping Subject{n}: missing scans')",
@@ -501,13 +385,13 @@ def nb_55_coreg_invariance() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 56 Face-detectability
+# 69 Face-detectability
 # ---------------------------------------------------------------------------
 
-def nb_56_face_detectability() -> dict:
+def nb_69_face_detectability() -> dict:
     return notebook([
         md(
-            "# 56 Face-detectability check",
+            "# 69 Face-detectability check",
             "Render the anonymized mesh from a sweep of viewpoints and "
             "run the MediaPipe Face Detector on every view. For vertex "
             "deletion the expected outcome is zero detections: there is "
@@ -612,35 +496,12 @@ def nb_56_face_detectability() -> dict:
             "    })",
             "    print(rows[-1])",
         ),
-        md("## 4. Summary + contact sheet"),
+        md("## 4. Summary table"),
         code(
             "df = pd.DataFrame(rows).sort_values('subject').reset_index(drop=True)",
             "df",
         ),
-        code(
-            "import matplotlib.pyplot as plt",
-            "import matplotlib.image as mpimg",
-            "",
-            "# Thesis rule: only Subject 17 may appear in a rendered figure.",
-            "CONTACT_SUBJECT = 17 if 17 in list(df.subject) else None",
-            "if CONTACT_SUBJECT is not None:",
-            "    dir_ = view_root / f'subject{CONTACT_SUBJECT}'",
-            "    imgs = sorted(dir_.glob('*.png'))",
-            "    n_cols = 7",
-            "    n_rows = int(np.ceil(len(imgs) / n_cols))",
-            "    fig, axes = plt.subplots(n_rows, n_cols, figsize=(2.4*n_cols, 2.4*n_rows))",
-            "    for ax, img_path in zip(np.atleast_1d(axes).ravel(), imgs):",
-            "        ax.imshow(mpimg.imread(img_path))",
-            "        ax.set_xticks([]); ax.set_yticks([])",
-            "        ax.set_title(img_path.stem.split('_', 1)[1], fontsize=6)",
-            "    for ax in np.atleast_1d(axes).ravel()[len(imgs):]:",
-            "        ax.axis('off')",
-            "    fig.suptitle(f'Face detectability contact sheet - Subject{CONTACT_SUBJECT}')",
-            "    fig.tight_layout()",
-            "    out = OUT_DIR / 'detectability_contact.pdf'",
-            "    fig.savefig(out, dpi=200, bbox_inches='tight')",
-            "    print(f'Wrote {out}')",
-        ),
+        md("## 5. Save CSV"),
         code(
             "out_csv = OUT_DIR / 'detectability_summary.csv'",
             "df.to_csv(out_csv, index=False)",
@@ -650,37 +511,27 @@ def nb_56_face_detectability() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 57 Auxiliary MediaPipe nasion
+# 70 Auxiliary MediaPipe nasion
 # ---------------------------------------------------------------------------
 
-def nb_57_auxiliary_nasion() -> dict:
+def nb_70_auxiliary_nasion() -> dict:
     return notebook([
         md(
-            "# 57 Auxiliary MediaPipe nasion route",
+            "# 70 Auxiliary MediaPipe nasion route",
             "Compares the automatic MediaPipe nasion detector to the "
             "manually picked nasion across the seven thesis subjects. "
-            "Feeds Table 4.8 (confidence + distance) and Figure 4.7 "
-            "(midline Y-profile plot for Subject 17) of the thesis.",
-            "**BRANCH REQUIRED.** The auto-nasion code was moved out of "
-            "`main` in commit 95a7a4c and now lives on the "
-            "`auto-detection-pipeline` branch. Before running this "
-            "notebook:",
-            "```",
-            "cd /home/ma7/BA/cedalion/cedalion",
-            "git checkout auto-detection-pipeline",
-            "```",
-            "Then run this notebook. Remember to switch back to `main` "
-            "afterwards so the other Results notebooks keep working.",
+            "Feeds Table 4.8 (confidence + distance) of the thesis.",
+            "**BRANCH REQUIRED.** The auto-nasion code lives on the "
+            "`auto-detection-pipeline` branch. Run "
+            "`git checkout auto-detection-pipeline` before executing, then "
+            "switch back to `main` afterwards.",
         ),
-        code(
-            COMMON_HEADER,
-            "import matplotlib.pyplot as plt",
-        ),
+        code(COMMON_HEADER),
         md(
             "## 1. Import the auto-nasion detector",
-            "This import only succeeds on the `auto-detection-pipeline` "
-            "branch. On `main` it raises `ImportError` and the notebook "
-            "cleanly reports that the branch switch is required.",
+            "Only succeeds on the `auto-detection-pipeline` branch; on "
+            "`main` the import fails and the notebook reports the missing "
+            "branch instead of running.",
         ),
         code(
             "try:",
@@ -697,7 +548,6 @@ def nb_57_auxiliary_nasion() -> dict:
         md("## 2. Per-subject comparison"),
         code(
             "rows = []",
-            "profiles = {}  # subject -> midline Y-profile for plotting",
             "if HAS_AUTO:",
             "    for n in SUBJECTS:",
             "        paths = subject_paths(n)",
@@ -706,23 +556,15 @@ def nb_57_auxiliary_nasion() -> dict:
             "            continue",
             "        surface_raw = load_raw(n)",
             "        landmarks_raw = load_landmarks(n)",
-            "",
             "        Nz_manual = landmarks_raw.sel(label='Nz').pint.dequantify().values",
-            "",
             "        result = detect_nasion_auto(surface_raw)",
-            "        Nz_auto = result.position",
             "        conf = float(result.confidence)",
-            "        dist = float(np.linalg.norm(Nz_manual - Nz_auto))",
-            "        outcome = 'success' if conf >= 0.3 else 'fallback'",
-            "",
             "        rows.append({",
             "            'subject': n,",
             "            'confidence': conf,",
-            "            'distance_to_manual_mm': dist,",
-            "            'outcome': outcome,",
+            "            'distance_to_manual_mm': float(np.linalg.norm(Nz_manual - result.position)),",
+            "            'outcome': 'success' if conf >= 0.3 else 'fallback',",
             "        })",
-            "        # Keep the midline profile if the detector exposes it",
-            "        profiles[n] = getattr(result, 'profile', None)",
             "        print(rows[-1])",
         ),
         md("## 3. Summary table"),
@@ -730,34 +572,7 @@ def nb_57_auxiliary_nasion() -> dict:
             "df = pd.DataFrame(rows).sort_values('subject').reset_index(drop=True) if rows else pd.DataFrame()",
             "df",
         ),
-        md(
-            "## 4. Figure 4.7: midline Y-profile for Subject 17",
-            "Plots the midline Y(z) profile with the auto-detected and "
-            "manually picked nasion annotated. The figure is scoped to "
-            "Subject 17 only because thesis data-sharing rules restrict "
-            "subject-identifiable figures to Subject 17, even though the "
-            "numeric table (Table 4.8) covers all seven subjects.",
-        ),
-        code(
-            "FIG_SUBJECT = 17",
-            "if FIG_SUBJECT in profiles and profiles[FIG_SUBJECT] is not None:",
-            "    prof = profiles[FIG_SUBJECT]",
-            "    r = df[df.subject == FIG_SUBJECT].iloc[0]",
-            "    fig, ax = plt.subplots(figsize=(8, 4))",
-            "    ax.plot(prof['z'], prof['y'], label='midline Y(z)')",
-            "    ax.set_title(f'Subject{FIG_SUBJECT} (conf={r.confidence:.2f}, "
-            "d={r.distance_to_manual_mm:.1f} mm)')",
-            "    ax.set_xlabel('Z (mm)')",
-            "    ax.set_ylabel('Y (mm)')",
-            "    ax.legend()",
-            "    fig.tight_layout()",
-            "    out = OUT_DIR / 'auxiliary_nasion_profile.pdf'",
-            "    fig.savefig(out, dpi=200, bbox_inches='tight')",
-            "    print(f'Wrote {out}')",
-            "else:",
-            "    print(f'No profile for Subject{FIG_SUBJECT}; skipping figure.')",
-        ),
-        md("## 5. Save CSV"),
+        md("## 4. Save CSV"),
         code(
             "if len(df):",
             "    out = OUT_DIR / 'auxiliary_nasion.csv'",
@@ -772,12 +587,11 @@ def nb_57_auxiliary_nasion() -> dict:
 # ---------------------------------------------------------------------------
 
 NOTEBOOKS = {
-    "51_batch_validation.ipynb": nb_51_batch_validation,
-    "52_pairwise_distances.ipynb": nb_52_pairwise_distances,
-    "54_before_after_renders.ipynb": nb_54_renders,
-    "55_coreg_invariance.ipynb": nb_55_coreg_invariance,
-    "56_face_detectability.ipynb": nb_56_face_detectability,
-    "57_auxiliary_nasion.ipynb": nb_57_auxiliary_nasion,
+    "64_batch_validation.ipynb": nb_64_batch_validation,
+    "65_pairwise_distances.ipynb": nb_65_pairwise_distances,
+    "68_coreg_invariance.ipynb": nb_68_coreg_invariance,
+    "69_face_detectability.ipynb": nb_69_face_detectability,
+    "70_auxiliary_nasion.ipynb": nb_70_auxiliary_nasion,
 }
 
 

@@ -15,7 +15,7 @@ import cedalion.typing as cdt
 import cedalion.xrutils as xrutils
 from cedalion.sigproc.frequency import sampling_rate
 from cedalion.utils import deprecated
-from cedalion import units, Quantity
+from cedalion import cite, units, Quantity
 
 from .quality import (
     detect_baselineshift,
@@ -40,9 +40,8 @@ def spline(
 ) -> cdt.NDTimeSeries:
     """Apply motion correction using spline interpolation to fNIRS data.
 
-    Based on Homer3 [1] v1.80.2 "hmrR_tInc_baselineshift_Ch_Nirs.m"
-    Boston University Neurophotonics Center
-    https://github.com/BUNPC/Homer3
+    Based on Homer3 v1.80.2 "hmrR_tInc_baselineshift_Ch_Nirs.m"
+    (:cite:t:`Huppert2009`), Boston University Neurophotonics Center.
 
     Args:
         ts: The time series to be motion corrected.
@@ -62,6 +61,7 @@ def spline(
     units = ts.pint.units
     ts = ts.pint.dequantify()
 
+    cite("Huppert2009")
     dodSpline = ts.copy()
 
     for ch in ts.channel.values:
@@ -299,10 +299,10 @@ def pca(
     Boston University Neurophotonics Center
     https://github.com/BUNPC/Homer3
 
-    Inputs:
+    Args:
         ts: The time series to be motion corrected.
         t_inc: The time series indicating the presence of motion artifacts.
-        n_sv: Specifies the number of prinicpal components to remove from the
+        n_sv: Specifies the number of principal components to remove from the
             data. If n_sv < 1 then the filter removes the first n components of the data
             that removes a fraction of the variance up to n_sv.
 
