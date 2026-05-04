@@ -22,6 +22,46 @@ logger = logging.getLogger("cedalion")
 
 
 @dataclass
+class ProtectedPointDelta:
+    """Per-landmark deviation between original and anonymized mesh.
+
+    Attributes:
+        label: protected-point label (e.g. ``"Nz"``).
+        d_orig_mm: distance from the protected point to the nearest vertex
+            of the original mesh.
+        d_anon_mm: distance from the protected point to the nearest vertex
+            of the anonymized mesh.
+        delta_mm: ``d_anon_mm - d_orig_mm``. The deletion operator only
+            drops vertices and never repositions a surviving one, so
+            ``delta_mm`` is bit-exact zero whenever the nearest vertex to
+            the landmark survives the deletion. Any nonzero value
+            indicates an operator-invariant violation.
+    """
+
+    label: str
+    d_orig_mm: float
+    d_anon_mm: float
+    delta_mm: float
+
+
+@dataclass
+class ProtectedPointsResult:
+    """Result of a per-landmark protected-point check.
+
+    Attributes:
+        per_point: one ``ProtectedPointDelta`` per protected point, in
+            input order.
+        max_abs_delta_mm: ``max(|delta_mm|)`` across ``per_point``; 0.0
+            when ``per_point`` is empty.
+        all_zero: True when every ``delta_mm`` is exactly zero.
+    """
+
+    per_point: list[ProtectedPointDelta]
+    max_abs_delta_mm: float
+    all_zero: bool
+
+
+@dataclass
 class ValidationResult:
     """Result of post-anonymization sanity check.
 
@@ -39,6 +79,8 @@ class ValidationResult:
             points; the deletion operator preserves surviving vertices
             bit-exact, so this must be 0 for a correct run
         face_coverage_pct: Percentage of original vertices in the facial mask
+        degenerate_face_pct: Percentage of degenerate faces (area < 1e-12) in
+            the anonymized mesh
         passed: True if all checks passed
         summary: Human-readable one-line summary
     """
@@ -50,6 +92,7 @@ class ValidationResult:
     protected_points_preserved: bool
     protected_point_max_delta_mm: float
     face_coverage_pct: float
+    degenerate_face_pct: float
     passed: bool = field(init=False)
     summary: str = field(init=False)
 
@@ -83,51 +126,68 @@ class ValidationResult:
         self.summary = f"FAILED: {'; '.join(issues)}"
 
 
-def _check_protected_points(
+def check_protected_points(
     original_surface: cdc.TrimeshSurface,
     anonymized_surface: cdc.TrimeshSurface,
     protected_points: cdt.LabeledPoints,
-) -> tuple[bool, float]:
+) -> ProtectedPointsResult:
     """Check that the deletion operator preserved every protected point.
 
-    For each protected point, compute d_anon (distance to nearest vertex of
-    the anonymized mesh) and d_orig (distance to nearest vertex of the
-    original mesh) and report Delta = d_anon - d_orig. Since the deletion
-    operator only drops vertices and never repositions a surviving one, the
-    nearest vertex to a protected point is the same vertex in both meshes
-    whenever it survives, and Delta must be bit-exact zero. Any nonzero
-    Delta indicates a violation of the operator's invariant.
+    For each protected point, compute ``d_anon`` (distance to nearest vertex
+    of the anonymized mesh) and ``d_orig`` (same against the original
+    mesh) and report ``delta = d_anon - d_orig``. Since the deletion
+    operator only drops vertices and never repositions a surviving one,
+    the nearest vertex to a protected point is the same vertex in both
+    meshes whenever it survives, and ``delta`` must be bit-exact zero.
+    Any nonzero ``delta`` indicates a violation of the operator's
+    invariant.
 
     Args:
-        original_surface: Mesh before anonymization
-        anonymized_surface: Mesh after anonymization
+        original_surface: Mesh before anonymization.
+        anonymized_surface: Mesh after anonymization.
         protected_points: Points whose nearest-vertex identity must be
-            preserved by the pipeline
+            preserved by the pipeline.
 
     Returns:
-        Tuple of (all_zero, max_abs_delta_mm)
+        ``ProtectedPointsResult`` with one entry per protected point.
+        Empty ``per_point`` and ``all_zero=True`` when
+        ``protected_points`` is None or carries no labels.
     """
     if protected_points is None or len(protected_points.label) == 0:
-        return True, 0.0
+        return ProtectedPointsResult(per_point=[], max_abs_delta_mm=0.0, all_zero=True)
 
     positions = protected_points.pint.dequantify().values
+    labels = [str(l) for l in protected_points.label.values]
     d_orig, _ = KDTree(original_surface.mesh.vertices).query(positions)
     d_anon, _ = KDTree(anonymized_surface.mesh.vertices).query(positions)
     delta = d_anon - d_orig
 
-    max_abs_delta = float(np.max(np.abs(delta)))
+    per_point = [
+        ProtectedPointDelta(
+            label=label,
+            d_orig_mm=float(do),
+            d_anon_mm=float(da),
+            delta_mm=float(d),
+        )
+        for label, do, da, d in zip(labels, d_orig, d_anon, delta)
+    ]
+    max_abs_delta = float(np.max(np.abs(delta))) if len(delta) else 0.0
     all_zero = max_abs_delta == 0.0
 
     if not all_zero:
-        labels = [str(l) for l in protected_points.label.values]
-        for label, d in zip(labels, delta):
-            if d != 0.0:
+        for entry in per_point:
+            if entry.delta_mm != 0.0:
                 logger.warning(
-                    f"Protected point '{label}' shifted by {d:+.3e} mm "
-                    f"(d_anon - d_orig); operator invariant violated"
+                    f"Protected point '{entry.label}' shifted by "
+                    f"{entry.delta_mm:+.3e} mm (d_anon - d_orig); "
+                    f"operator invariant violated"
                 )
 
-    return all_zero, max_abs_delta
+    return ProtectedPointsResult(
+        per_point=per_point,
+        max_abs_delta_mm=max_abs_delta,
+        all_zero=all_zero,
+    )
 
 
 @cdc.validate_schemas
@@ -174,13 +234,15 @@ def validate_anonymization(
     # when degenerate faces exceed 1% of the total.
     mesh = anonymized_surface.mesh
     n_degenerate = int(np.sum(mesh.area_faces < 1e-12))
-    pct_degenerate = 100.0 * n_degenerate / len(mesh.faces)
+    pct_degenerate = (
+        100.0 * n_degenerate / len(mesh.faces) if len(mesh.faces) else 0.0
+    )
     mesh_valid = len(mesh.faces) > 0 and pct_degenerate <= 1.0
     if n_degenerate > 0:
         log = logger.warning if not mesh_valid else logger.info
         log(f"Mesh has {n_degenerate} degenerate faces ({pct_degenerate:.4f}%)")
 
-    points_preserved, max_delta = _check_protected_points(
+    pp = check_protected_points(
         original_surface, anonymized_surface, protected_points
     )
 
@@ -189,9 +251,10 @@ def validate_anonymization(
         mesh_valid=mesh_valid,
         expected_vertices_removed=expected_removed,
         actual_vertices_removed=actual_removed,
-        protected_points_preserved=points_preserved,
-        protected_point_max_delta_mm=max_delta,
+        protected_points_preserved=pp.all_zero,
+        protected_point_max_delta_mm=pp.max_abs_delta_mm,
         face_coverage_pct=100.0 * expected_removed / orig_count,
+        degenerate_face_pct=pct_degenerate,
     )
     logger.info(f"Anonymization validation: {result.summary}")
     return result

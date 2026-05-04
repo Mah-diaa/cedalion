@@ -1,8 +1,10 @@
-"""Generate the CSV-producing thesis notebooks (64, 65, 68, 69, 70).
+"""Generate the CSV-producing thesis notebooks (64, 68, 70).
 
-Running this script writes five .ipynb files alongside it. They share
-the helpers in `_thesis_helpers.py` and produce the CSV tables cited in
-the Results chapter.
+Running this script writes three .ipynb files alongside it. Each
+notebook imports cohort/IO helpers from `_thesis_data.py` and the
+pipeline wrapper from `_thesis_pipeline.py`, then calls the public
+anonymization API (and `validate_anonymization` for nb 64) to produce
+the CSV tables cited in the Results chapter.
 
 The script is idempotent: re-running overwrites the notebooks, so edit
 the source cells here, not the notebook directly. Notebooks 66, 72, 73
@@ -68,10 +70,11 @@ def write(path: Path, nb: dict) -> None:
 COMMON_HEADER = """\
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path().resolve()))
-from _thesis_helpers import (
+from _thesis_data import (
     SUBJECTS, subject_paths, load_raw, load_anon, load_landmarks,
-    available_subjects, missing_report, run_pipeline,
+    available_subjects, missing_report,
 )
+from _thesis_pipeline import run_pipeline
 
 import numpy as np
 import pandas as pd
@@ -93,13 +96,12 @@ def nb_64_batch_validation() -> dict:
             "needs: vertex and face counts before and after deletion, the "
             "percentage of vertices removed, the cap-boundary height, and "
             "the degenerate-face percentage on the anonymized mesh.",
-            "The landmark-to-surface distance check that was here earlier "
-            "was dropped: the five 10-20 landmarks are stored in the "
-            "`_landmarks.tsv` sidecar and are therefore preserved by "
-            "construction (the deletion operator does not touch the "
-            "landmark array). Optode preservation is the science-relevant "
-            "question and is handled in notebook 68. Face-detectability is "
-            "handled in notebook 69.",
+            "Structural checks (vertex-count delta, mesh validity, "
+            "degenerate-face ratio, protected-point preservation) come "
+            "from the shipped `validate_anonymization` -- the same "
+            "function the production pipeline could invoke -- so the "
+            "thesis numbers are produced by the function the codebase "
+            "actually exports, not a notebook re-implementation.",
             "Output: `thesis_results_out/batch_validation.csv`, which "
             "populates the mesh-statistics table and the mesh-integrity "
             "prose of Chapter 4.",
@@ -107,7 +109,12 @@ def nb_64_batch_validation() -> dict:
             "`Subject{N}_anon_landmarks.tsv` sidecar, written by notebook "
             "48. Subjects without the sidecar are skipped with a warning.",
         ),
-        code(COMMON_HEADER),
+        code(
+            COMMON_HEADER,
+            "from cedalion.geometry.photogrammetry.anonymization import (",
+            "    validate_anonymization,",
+            ")",
+        ),
         md("## 1. Which subjects are ready?"),
         code(
             "ready = available_subjects()",
@@ -121,9 +128,12 @@ def nb_64_batch_validation() -> dict:
         md(
             "## 2. Run pipeline per subject, collect mesh statistics",
             "For each ready subject we load the raw scan and landmarks, "
-            "run the pipeline, and record mesh statistics on the "
-            "CTF-aligned head (`surface_ctf`) and the anonymized mesh "
-            "(`surface_anon_ctf`). No validator call; just direct counts.",
+            "run the pipeline (via the wrapper that exposes intermediates) "
+            "and pass the CTF-aligned head, the anonymized mesh, the "
+            "deletion mask, and the landmarks to "
+            "`validate_anonymization`. The wrapper hands us "
+            "`pct_vertices_removed` and `cap_z_mm` directly; everything "
+            "else comes from the validator.",
         ),
         code(
             "rows = []",
@@ -133,36 +143,40 @@ def nb_64_batch_validation() -> dict:
             "    landmarks_raw = load_landmarks(n)",
             "    art = run_pipeline(surface_raw, landmarks_raw, subject=n)",
             "",
+            "    result = validate_anonymization(",
+            "        original_surface=art.surface_ctf,",
+            "        anonymized_surface=art.surface_anon_ctf,",
+            "        facial_mask=art.mask,",
+            "        protected_points=art.landmarks_ctf,",
+            "    )",
+            "",
             "    n_head = art.surface_ctf.nvertices",
-            "    n_faces_head = art.surface_ctf.nfaces",
-            "    n_anon = art.surface_anon_ctf.nvertices",
-            "    n_faces_anon = art.surface_anon_ctf.nfaces",
-            "    mask_size = int(art.mask.sum())",
-            "    degen_area = (art.surface_anon_ctf.mesh.area_faces < 1e-12)",
-            "    degen_pct = 100.0 * float(degen_area.sum()) / max(1, len(degen_area))",
-            "    pct_removed = 100.0 * (n_head - n_anon) / max(1, n_head)",
+            "    pct_removed = 100.0 * result.actual_vertices_removed / max(1, n_head)",
             "",
             "    row = {",
             "        'subject': n,",
             "        'n_vertices_raw': surface_raw.nvertices,",
             "        'n_faces_raw': surface_raw.nfaces,",
             "        'n_vertices_head': n_head,",
-            "        'n_faces_head': n_faces_head,",
-            "        'mask_size': mask_size,",
-            "        'n_vertices_anonymized': n_anon,",
-            "        'n_faces_anonymized': n_faces_anon,",
-            "        'vertices_removed': int(n_head - n_anon),",
-            "        'faces_removed': int(n_faces_head - n_faces_anon),",
+            "        'n_faces_head': art.surface_ctf.nfaces,",
+            "        'mask_size': result.expected_vertices_removed,",
+            "        'n_vertices_anonymized': art.surface_anon_ctf.nvertices,",
+            "        'n_faces_anonymized': art.surface_anon_ctf.nfaces,",
+            "        'vertices_removed': result.actual_vertices_removed,",
+            "        'faces_removed': int(art.surface_ctf.nfaces - art.surface_anon_ctf.nfaces),",
             "        'pct_vertices_removed': pct_removed,",
-            "        'degenerate_face_pct': degen_pct,",
+            "        'degenerate_face_pct': result.degenerate_face_pct,",
+            "        'protected_point_max_delta_mm': result.protected_point_max_delta_mm,",
             "        'cap_z_mm': art.cap_z,",
+            "        'passed': result.passed,",
             "    }",
             "    rows.append(row)",
             "    print(",
-            "        f'  head: {n_head:,} v / {n_faces_head:,} f  ->  '",
-            "        f'anon: {n_anon:,} v / {n_faces_anon:,} f  '",
-            "        f'(-{pct_removed:.1f}%, degen {degen_pct:.3f}%, '",
-            "        f'cap_z {art.cap_z:.1f} mm)'",
+            "        f'  head: {n_head:,} v / {art.surface_ctf.nfaces:,} f  ->  '",
+            "        f'anon: {art.surface_anon_ctf.nvertices:,} v / "
+            "{art.surface_anon_ctf.nfaces:,} f  '",
+            "        f'(-{pct_removed:.1f}%, degen {result.degenerate_face_pct:.3f}%, '",
+            "        f'cap_z {art.cap_z:.1f} mm)  {result.summary}'",
             "    )",
         ),
         md(
@@ -181,94 +195,6 @@ def nb_64_batch_validation() -> dict:
             "out = OUT_DIR / 'batch_validation.csv'",
             "df.to_csv(out, index=False)",
             "print(f'Wrote {out} ({len(df)} rows)')",
-        ),
-    ])
-
-
-# ---------------------------------------------------------------------------
-# 65 Pairwise landmark distances
-# ---------------------------------------------------------------------------
-
-def nb_65_pairwise_distances() -> dict:
-    return notebook([
-        md(
-            "# 65 Pairwise inter-landmark distances",
-            "Deletion preserves every non-masked vertex bit-exact, so the "
-            "ten pairwise distances among the five 10-20 landmarks must "
-            "match between the original mesh and the anonymized mesh. This "
-            "notebook computes that table for one representative subject "
-            "(Subject 17 by default) and populates Table 4.3 of the thesis.",
-            "The check is reported for one subject because the deletion "
-            "operator is the same for every subject; the remaining six "
-            "subjects' entries in Table 4.3 would be identical zeros and "
-            "add no information.",
-        ),
-        code(COMMON_HEADER, "SUBJECT = 17"),
-        md(
-            "## 1. Load original and anonymized landmarks",
-            "The TSV written by `save_anonymized_scan` uses the digitized "
-            "frame, the same frame as the raw OBJ. Both the original and "
-            "anonymized landmarks therefore live in a common coordinate "
-            "system; any difference between pairwise distances reflects "
-            "landmark displacement, not a frame mismatch.",
-        ),
-        code(
-            "import cedalion.io",
-            "paths = subject_paths(SUBJECT)",
-            "landmarks_orig = cedalion.io.load_tsv(str(paths.landmarks_tsv))",
-            "print('Original landmarks:')",
-            "print(landmarks_orig)",
-        ),
-        md(
-            "## 2. Re-run pipeline to obtain the anonymized landmarks",
-            "`save_anonymized_scan` writes a single `_landmarks.tsv` -- the "
-            "landmarks as they sit on the anonymized output. For this "
-            "comparison we want both: the landmarks on the original (just "
-            "loaded) and the landmarks after the affine round-trip.  Since "
-            "the deletion step itself does not touch the landmark array, "
-            "we can simply re-run the pipeline and take "
-            "`landmarks_dig`.",
-        ),
-        code(
-            "surface_raw = load_raw(SUBJECT)",
-            "art = run_pipeline(surface_raw, landmarks_orig, subject=SUBJECT)",
-            "landmarks_anon = art.landmarks_dig",
-            "print('Anonymized landmarks:')",
-            "print(landmarks_anon)",
-        ),
-        md(
-            "## 3. Compute pairwise distances",
-            "All 10 unordered pairs among {Nz, Iz, Cz, Lpa, Rpa}.",
-        ),
-        code(
-            "from itertools import combinations",
-            "",
-            "def _pos(da, label):",
-            "    arr = da.pint.dequantify().values",
-            "    labels = list(da['label'].values)",
-            "    return arr[labels.index(label)]",
-            "",
-            "labels = ['Nz', 'Iz', 'Cz', 'LPA', 'RPA']",
-            "rows = []",
-            "for a, b in combinations(labels, 2):",
-            "    d_orig = float(np.linalg.norm(_pos(landmarks_orig, a) - _pos(landmarks_orig, b)))",
-            "    d_anon = float(np.linalg.norm(_pos(landmarks_anon, a) - _pos(landmarks_anon, b)))",
-            "    rows.append({",
-            "        'pair': f'{a}-{b}',",
-            "        'd_original_mm': d_orig,",
-            "        'd_anonymized_mm': d_anon,",
-            "        'abs_diff_mm': abs(d_orig - d_anon),",
-            "    })",
-            "",
-            "df = pd.DataFrame(rows)",
-            "df",
-        ),
-        md("## 4. Save"),
-        code(
-            "out = OUT_DIR / 'pairwise_distances.csv'",
-            "df.to_csv(out, index=False)",
-            "print(f'Max |diff|: {df.abs_diff_mm.max():.6g} mm')",
-            "print(f'Wrote {out}')",
         ),
     ])
 
@@ -294,6 +220,7 @@ def nb_68_coreg_invariance() -> dict:
         ),
         code(
             COMMON_HEADER,
+            "from _thesis_data import OPTODE_SUBJECTS",
             "import cedalion",
             "from cedalion.geometry.photogrammetry.processors import (",
             "    ColoredStickerProcessor,",
@@ -329,7 +256,6 @@ def nb_68_coreg_invariance() -> dict:
             "bare-cap subjects have nothing to detect, so they are skipped.",
         ),
         code(
-            "from _thesis_helpers import OPTODE_SUBJECTS",
             "rows = []",
             "for n in OPTODE_SUBJECTS:",
             "    paths = subject_paths(n)",
@@ -380,132 +306,6 @@ def nb_68_coreg_invariance() -> dict:
             "out = OUT_DIR / 'coreg_invariance.csv'",
             "df.to_csv(out, index=False)",
             "print(f'Wrote {out}')",
-        ),
-    ])
-
-
-# ---------------------------------------------------------------------------
-# 69 Face-detectability
-# ---------------------------------------------------------------------------
-
-def nb_69_face_detectability() -> dict:
-    return notebook([
-        md(
-            "# 69 Face-detectability check",
-            "Render the anonymized mesh from a sweep of viewpoints and "
-            "run the MediaPipe Face Detector on every view. For vertex "
-            "deletion the expected outcome is zero detections: there is "
-            "no face surface left for the detector to latch onto. "
-            "Detection counts are reported for every subject "
-            "(Table 4.7); the contact-sheet figure is rendered for "
-            "Subject 17 only, because thesis data-sharing rules allow "
-            "identifiable renders for Subject 17 only.",
-            "Populates Figure 4.6 (contact sheet) and Table 4.7 "
-            "(per-subject detection counts) of the thesis.",
-            "Dependency: `mediapipe`. Install into the cedalion env with "
-            "`pip install mediapipe` if not yet present.",
-        ),
-        code(
-            COMMON_HEADER,
-            "import pyvista as pv",
-            "pv.OFF_SCREEN = True",
-            "import cv2  # for BGR -> RGB conversion",
-            "",
-            "# Yaw/pitch sweep in degrees",
-            "YAWS = list(range(-90, 91, 30))   # -90 .. 90 step 30",
-            "PITCHES = [-20, 0, 20]",
-            "WINDOW = (640, 640)",
-            "GREY = (200, 200, 200)",
-        ),
-        md(
-            "## 1. Render sweep",
-            "Rotate the camera around the anonymized head in yaw/pitch, "
-            "save each frame to disk so MediaPipe can read it.",
-        ),
-        code(
-            "from cedalion.vtktutils import trimesh_to_vtk_polydata",
-            "",
-            "def render_sweep(surface, out_dir, subject_n):",
-            "    out_dir.mkdir(parents=True, exist_ok=True)",
-            "    poly = pv.wrap(trimesh_to_vtk_polydata(surface.mesh))",
-            "    files = []",
-            "    for yaw in YAWS:",
-            "        for pitch in PITCHES:",
-            "            pvplt = pv.Plotter(off_screen=True, window_size=WINDOW)",
-            "            pvplt.add_mesh(poly, color=[c/255 for c in GREY], smooth_shading=True)",
-            "            pvplt.set_background('white')",
-            "            pvplt.enable_anti_aliasing('ssaa')",
-            "            pvplt.view_xz()",
-            "            pvplt.camera.azimuth = 180 + yaw",
-            "            pvplt.camera.elevation = pitch",
-            "            pvplt.camera.zoom(1.3)",
-            "            fn = out_dir / f'subject{subject_n}_yaw{yaw:+04d}_pitch{pitch:+03d}.png'",
-            "            pvplt.screenshot(str(fn))",
-            "            pvplt.close()",
-            "            files.append((yaw, pitch, fn))",
-            "    return files",
-        ),
-        md(
-            "## 2. MediaPipe detector",
-            "Uses the short-range Face Detection model. Confidence "
-            "threshold is left at the default 0.5; we also record the "
-            "maximum confidence observed per view for the table.",
-        ),
-        code(
-            "import mediapipe as mp",
-            "mp_face_detection = mp.solutions.face_detection",
-            "",
-            "def detect_faces(image_path):",
-            "    img = cv2.imread(str(image_path))",
-            "    if img is None:",
-            "        return 0, 0.0",
-            "    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)",
-            "    with mp_face_detection.FaceDetection(",
-            "        model_selection=0, min_detection_confidence=0.5",
-            "    ) as fd:",
-            "        result = fd.process(rgb)",
-            "    if result.detections is None:",
-            "        return 0, 0.0",
-            "    confidences = [d.score[0] for d in result.detections]",
-            "    return len(confidences), float(max(confidences))",
-        ),
-        md("## 3. Per-subject sweep + detection"),
-        code(
-            "view_root = OUT_DIR / 'detectability_views'",
-            "rows = []",
-            "for n in SUBJECTS:",
-            "    if not subject_paths(n).anon_exists:",
-            "        print(f'skipping Subject{n}: no anon .obj')",
-            "        continue",
-            "    print(f'--- Subject{n} ---')",
-            "    surface = load_anon(n)",
-            "    files = render_sweep(surface, view_root / f'subject{n}', n)",
-            "    hits = 0",
-            "    max_conf = 0.0",
-            "    n_views = len(files)",
-            "    for yaw, pitch, fn in files:",
-            "        k, c = detect_faces(fn)",
-            "        hits += int(k > 0)",
-            "        if c > max_conf:",
-            "            max_conf = c",
-            "    rows.append({",
-            "        'subject': n,",
-            "        'n_views': n_views,",
-            "        'detector_hits': hits,",
-            "        'max_confidence': max_conf,",
-            "    })",
-            "    print(rows[-1])",
-        ),
-        md("## 4. Summary table"),
-        code(
-            "df = pd.DataFrame(rows).sort_values('subject').reset_index(drop=True)",
-            "df",
-        ),
-        md("## 5. Save CSV"),
-        code(
-            "out_csv = OUT_DIR / 'detectability_summary.csv'",
-            "df.to_csv(out_csv, index=False)",
-            "print(f'Wrote {out_csv}')",
         ),
     ])
 
@@ -588,9 +388,7 @@ def nb_70_auxiliary_nasion() -> dict:
 
 NOTEBOOKS = {
     "64_batch_validation.ipynb": nb_64_batch_validation,
-    "65_pairwise_distances.ipynb": nb_65_pairwise_distances,
     "68_coreg_invariance.ipynb": nb_68_coreg_invariance,
-    "69_face_detectability.ipynb": nb_69_face_detectability,
     "70_auxiliary_nasion.ipynb": nb_70_auxiliary_nasion,
 }
 

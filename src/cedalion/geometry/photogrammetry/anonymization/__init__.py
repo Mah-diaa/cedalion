@@ -52,7 +52,13 @@ from .mask import (
     save_anonymized_scan,
 )
 from .pipeline import anonymize_scan
-from .validator import validate_anonymization, ValidationResult
+from .validator import (
+    ProtectedPointDelta,
+    ProtectedPointsResult,
+    ValidationResult,
+    check_protected_points,
+    validate_anonymization,
+)
 
 
 __all__ = [
@@ -72,4 +78,7 @@ __all__ = [
     # Post-pipeline validation
     "validate_anonymization",
     "ValidationResult",
+    "check_protected_points",
+    "ProtectedPointDelta",
+    "ProtectedPointsResult",
 ]
