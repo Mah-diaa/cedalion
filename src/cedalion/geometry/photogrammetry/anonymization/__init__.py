@@ -48,6 +48,7 @@ from .mask import (
     save_anonymized_scan,
 )
 from .pipeline import anonymize_scan
+from .nasion_detector import detect_nasion_auto, derive_landmarks_from_nasion
 
 
 __all__ = [
@@ -64,4 +65,7 @@ __all__ = [
     "face_mask_from_landmarks",
     "delete_masked_vertices",
     "save_anonymized_scan",
+    # Auxiliary MediaPipe nasion route (rejoins anonymize_scan)
+    "detect_nasion_auto",
+    "derive_landmarks_from_nasion",
 ]
