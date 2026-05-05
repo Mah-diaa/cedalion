@@ -1,117 +1,59 @@
-# Face Anonymization for Photogrammetry Scans
-
-**Thesis:** "Development of an Automatic Face Removal Algorithm for Photogrammetry Scans for Data Protection" — M.Sc. thesis, TU Berlin / IBS Lab
-
-This is a fork of [cedalion](https://github.com/ibs-lab/cedalion) extended with a geometric face anonymization module for Einstar photogrammetry scans acquired in fNIRS research. The module lives at:
-
-```
-src/cedalion/geometry/photogrammetry/anonymization/
-```
-
-## Installation
-
-Requires the cedalion conda environment:
-
-```bash
-conda env create -f environment_dev.yml
-conda activate cedalion
-pip install -e .
-```
-
-## Usage
-
-### Interactive single-scan workflow (canonical)
-
-Open `examples/head_models/51_manual_5pt_anonymization.ipynb`. The notebook:
-1. Loads an Einstar scan (`cedalion.io.read_einstar_obj`)
-2. Picks the five 10-20 landmarks interactively (Nz, Iz, Cz, LPA, RPA)
-3. Calls `anonymize_scan(surface, landmarks)`
-4. Shows a before/after comparison
-5. Saves the anonymized OBJ + `_landmarks.tsv` sidecar via `save_anonymized_scan`
-
-## Module structure
-
-```
-pipeline.py       anonymize_scan — canonical entry point
-preprocessing.py  normalize_axes, isolate_head, align_axes_from_landmarks,
-                  revert_to_einstar_frame
-mask.py           detect_cap_boundary, face_mask_from_landmarks,
-                  delete_masked_vertices, save_anonymized_scan
-_utils.py         private helpers shared by all of the above
-```
-
-Pipeline steps inside `anonymize_scan`:
-
-1. `normalize_axes` — rotate so +Y points anterior (handles arbitrary Einstar orientation)
-2. `isolate_head` — remove body, shoulders, and disconnected fragments
-3. `align_axes_from_landmarks` — map to CTF frame (+X anterior, +Y left, +Z up)
-4. `detect_cap_boundary` — locate the front cap-edge height along Z
-5. `face_mask_from_landmarks` — face region union ear spheres, clamped below the cap
-6. Landmark preservation — 8 mm spheres around each landmark + midline nasion strip
-7. `delete_masked_vertices` — drop triangles touching any masked vertex, UVs in sync
-8. `revert_to_einstar_frame` — return to `crs="digitized"` for saving
-
-## Tests
-
-```bash
-pytest tests/test_anonymization.py -v
-```
-
-22 tests covering all eight public functions and the end-to-end pipeline. No external data required (synthetic trimesh spheres only).
-
-## Branch layout
-
-| Branch | Contents |
-|--------|---------|
-| `main` | Core anonymization module, notebook 51, test suite |
-| `validation/face-anonymization` | Validation notebooks 64-73, batch CSV producers |
-| `auxiliary/mediapipe-nasion` | Experimental automatic nasion detection (MediaPipe) |
-
----
-
-*Upstream cedalion documentation below.*
-
----
-
-# Cedalion - fNIRS analysis toolbox
-
-A python-based framework for the data-driven analysis of multimodal fNIRS and DOT in naturalistic environments. Developed by the [Intelligent Biomedical Sensing (IBS) Lab](https://ibs-lab.com/) with and for the community.
-
 <p align="center">
-    <img src="docs/img/cedalion_frontpage.png" />
+    <img src="docs/img/IBS_clr_small.png" />
 </p>
 
+# cedalion - fNIRS analysis toolbox
+
+> **Thesis fork:** the face anonymization implementation lives on the `feature/face-anonymization` branch.
+
+To avoid misinterpretations and to facilitate studies in naturalistic environments, fNIRS measurements will increasingly be combined with recordings from physiological sensors and other neuroimaging modalities.
+The aim of this toolbox is to facilitate this kind of analyses, i.e. it should allow the easy integration of machine learning techniques and provide unsupervised decomposition techniques for
+multimodal fNIRS signals.
 
 ## Documentation
 
 The [documentation](https://doc.ibs.tu-berlin.de/cedalion/doc/dev) contains
-[installation instructions](https://doc.ibs.tu-berlin.de/cedalion/doc/dev/getting_started/installation.html), an [API reference](https://doc.ibs.tu-berlin.de/cedalion/doc/dev/api/modules.html) as
-well as many [example notebooks](https://doc.ibs.tu-berlin.de/cedalion/doc/dev/examples.html) that illustrate the functionality of the toolbox.
+[installation instructions](https://doc.ibs.tu-berlin.de/cedalion/doc/dev/getting_started/installation.html) as
+well as several [example notebooks](https://doc.ibs.tu-berlin.de/cedalion/doc/dev/examples.html)
+that illustrate the functionality of the toolbox.
+For discussions and help you can visit the [cedalion forum on openfnirs.org](https://openfnirs.org/community/cedalion/)
 
 
+## Development environment
 
-## Installation
+To create a conda environment with the necessary dependencies run:
 
-Please refer to the [installation instructions](https://doc.ibs.tu-berlin.de/cedalion/doc/dev/getting_started/installation.html) in the documentation for installing Cedalion
-on you computer.
+```
+$ conda env create -n cedalion -f environment_dev.yml
+```
 
-To test the [example notebooks](https://doc.ibs.tu-berlin.de/cedalion/doc/dev/examples.html) without installing Cedalion locally, you can also [run the notebooks on Google Colab](https://doc.ibs.tu-berlin.de/cedalion/doc/dev/getting_started/colab_setup.html).
+Afterwards activate the environment and add an editable install of `cedalion` to it:
+```
+$ conda activate cedalion
+$ pip install -e .
+$ bash install_nirfaster.sh CPU # or GPU
+```
 
-## Versions
-The `main` branch acts as a relase branch, i.e. the latest commit there is the most 
-current release. Development happens in the `dev` branch. Please refer to the [CHANGELOG](https://doc.ibs.tu-berlin.de/cedalion/doc/dev/CHANGELOG.html) for a release 
-history and current differences between the `dev` and `main` branches.
+This will also install Jupyter Notebook to run the example notebooks.
 
-
-## Forum
-
-For discussions and help please visit the [Cedalion forum on openfnirs.org](https://openfnirs.org/community/cedalion/)
-
+If conda is too slow consider using the faster drop-in replacement [mamba](https://mamba.readthedocs.io/en/latest/).
+If you have Miniconda or Anaconda you can install mamba with:
+'''
+$ conda install mamba -c conda-forge
+'''
+and then create the environment with
+```
+$ mamba env create -n cedalion -f environment_dev.yml
+```
+Please note: If this does not socceed there is another route to go:
+Install the libmamba solver
+'''
+$ conda install -n base conda-libmamba-solver
+'''
+and then build the environment with the --solver=libmamba
+```
+$ conda env create -n cedalion -f environment_dev.yml --solver=libmamba
+```
 
 ## How to cite Cedalion
 A paper for the toolbox is currently in the making. If you use this toolbox for a publication in the meantime, please cite us using GitHub's  "Cite this repository" feature in the "About" section. If you want to contact us or learn more about the IBS-Lab please go to https://www.ibs-lab.com/
-
-
-## License
-
-Cedalion is licensed under the MIT license.
