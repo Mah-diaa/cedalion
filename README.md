@@ -29,19 +29,6 @@ Open `examples/head_models/51_manual_5pt_anonymization.ipynb`. The notebook:
 4. Shows a before/after comparison
 5. Saves the anonymized OBJ + `_landmarks.tsv` sidecar via `save_anonymized_scan`
 
-### Scripted batch reproduction
-
-After notebook 51 has been run for all subjects (writing the `_landmarks.tsv` sidecars):
-
-```bash
-cd examples/head_models
-# Edit SCANS_FOLDER at the top of the script to point at your scan directory
-python reproduce_anonymization.py           # batch anonymize all subjects
-python reproduce_anonymization.py --profile # same, plus per-function timing
-```
-
-The script auto-discovers subjects by looking for matching raw OBJ + `_anon_landmarks.tsv` pairs.
-
 ## Module structure
 
 ```
