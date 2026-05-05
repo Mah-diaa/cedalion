@@ -47,7 +47,9 @@ BARE_CAP_SUBJECTS = [12, 13, 14, 15]
 # the earlier thesis revisions; bare-cap subjects extend the numbering as
 # S8..S11 -> Subject 12..15.
 SUBJECTS = OPTODE_SUBJECTS + BARE_CAP_SUBJECTS
-SCANS_FOLDER = Path("/home/ma7/BA/PG_Subjects")
+# Edit to point at your scan directory. Expected layout:
+#   <SCANS_FOLDER>/Subject<n>/Subject<n>.obj
+SCANS_FOLDER = Path("./PG_Subjects")
 
 
 def is_optode(n: int) -> bool:
