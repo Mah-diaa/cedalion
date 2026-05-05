@@ -189,3 +189,6 @@ plugins/
 
 # thesis-only generated artifacts (regenerable from validation notebooks)
 examples/head_models/thesis_results_out/
+
+# machine-local scan-data symlink (points to /home/ma7/BA/PG_Subjects)
+examples/head_models/PG_Subjects
