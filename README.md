@@ -1,3 +1,91 @@
+# Face Anonymization for Photogrammetry Scans
+
+**Thesis:** "Development of an Automatic Face Removal Algorithm for Photogrammetry Scans for Data Protection" — M.Sc. thesis, TU Berlin / IBS Lab
+
+This is a fork of [cedalion](https://github.com/ibs-lab/cedalion) extended with a geometric face anonymization module for Einstar photogrammetry scans acquired in fNIRS research. The module lives at:
+
+```
+src/cedalion/geometry/photogrammetry/anonymization/
+```
+
+## Installation
+
+Requires the cedalion conda environment:
+
+```bash
+conda env create -f environment_dev.yml
+conda activate cedalion
+pip install -e .
+```
+
+## Usage
+
+### Interactive single-scan workflow (canonical)
+
+Open `examples/head_models/51_manual_5pt_anonymization.ipynb`. The notebook:
+1. Loads an Einstar scan (`cedalion.io.read_einstar_obj`)
+2. Picks the five 10-20 landmarks interactively (Nz, Iz, Cz, LPA, RPA)
+3. Calls `anonymize_scan(surface, landmarks)`
+4. Shows a before/after comparison
+5. Saves the anonymized OBJ + `_landmarks.tsv` sidecar via `save_anonymized_scan`
+
+### Scripted batch reproduction
+
+After notebook 51 has been run for all subjects (writing the `_landmarks.tsv` sidecars):
+
+```bash
+cd examples/head_models
+# Edit SCANS_FOLDER at the top of the script to point at your scan directory
+python reproduce_anonymization.py           # batch anonymize all subjects
+python reproduce_anonymization.py --profile # same, plus per-function timing
+```
+
+The script auto-discovers subjects by looking for matching raw OBJ + `_anon_landmarks.tsv` pairs.
+
+## Module structure
+
+```
+pipeline.py       anonymize_scan — canonical entry point
+preprocessing.py  normalize_axes, isolate_head, align_axes_from_landmarks,
+                  revert_to_einstar_frame
+mask.py           detect_cap_boundary, face_mask_from_landmarks,
+                  delete_masked_vertices, save_anonymized_scan
+_utils.py         private helpers shared by all of the above
+```
+
+Pipeline steps inside `anonymize_scan`:
+
+1. `normalize_axes` — rotate so +Y points anterior (handles arbitrary Einstar orientation)
+2. `isolate_head` — remove body, shoulders, and disconnected fragments
+3. `align_axes_from_landmarks` — map to CTF frame (+X anterior, +Y left, +Z up)
+4. `detect_cap_boundary` — locate the front cap-edge height along Z
+5. `face_mask_from_landmarks` — face region union ear spheres, clamped below the cap
+6. Landmark preservation — 8 mm spheres around each landmark + midline nasion strip
+7. `delete_masked_vertices` — drop triangles touching any masked vertex, UVs in sync
+8. `revert_to_einstar_frame` — return to `crs="digitized"` for saving
+
+## Tests
+
+```bash
+pytest tests/test_anonymization.py -v
+```
+
+22 tests covering all eight public functions and the end-to-end pipeline. No external data required (synthetic trimesh spheres only).
+
+## Branch layout
+
+| Branch | Contents |
+|--------|---------|
+| `main` | Core anonymization module, notebook 51, test suite |
+| `validation/face-anonymization` | Validation notebooks 64-73, batch CSV producers |
+| `auxiliary/mediapipe-nasion` | Experimental automatic nasion detection (MediaPipe) |
+
+---
+
+*Upstream cedalion documentation below.*
+
+---
+
 # Cedalion - fNIRS analysis toolbox
 
 A python-based framework for the data-driven analysis of multimodal fNIRS and DOT in naturalistic environments. Developed by the [Intelligent Biomedical Sensing (IBS) Lab](https://ibs-lab.com/) with and for the community.
