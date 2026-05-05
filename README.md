@@ -63,7 +63,8 @@ pytest tests/test_anonymization.py -v
 
 | Branch | Contents |
 |--------|---------|
-| `main` | Core anonymization module, notebook 51, test suite |
+| `feature/face-anonymization` | **This branch** — thesis implementation (anonymization module, notebook 51, test suite) |
+| `main` | Upstream cedalion base |
 | `validation/face-anonymization` | Validation notebooks 64-73, batch CSV producers |
 | `auxiliary/mediapipe-nasion` | Experimental automatic nasion detection (MediaPipe) |
 
