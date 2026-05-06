@@ -1,8 +1,8 @@
 # Face Anonymization for Photogrammetry Scans
 
-**Thesis:** "Development of an Automatic Face Removal Algorithm for Photogrammetry Scans for Data Protection" — M.Sc. thesis, TU Berlin / IBS Lab
+**Thesis (M.Sc., TU Berlin / IBS Lab):** "Development of a Landmark-Aware Face-Removal Algorithm for Photogrammetric Head Scans for Data Protection"
 
-This is a fork of [cedalion](https://github.com/ibs-lab/cedalion) extended with a geometric face anonymization module for Einstar photogrammetry scans acquired in fNIRS research. The module lives at:
+This is a fork of [cedalion](https://github.com/ibs-lab/cedalion) with a geometric face anonymization module for Einstar photogrammetry scans used in fNIRS research. The module lives at:
 
 ```
 src/cedalion/geometry/photogrammetry/anonymization/
@@ -20,7 +20,7 @@ pip install -e .
 
 ## Usage
 
-### Interactive single-scan workflow (canonical)
+### Interactive single-scan workflow
 
 Open `examples/head_models/51_manual_5pt_anonymization.ipynb`. The notebook:
 1. Loads an Einstar scan (`cedalion.io.read_einstar_obj`)
@@ -33,8 +33,8 @@ Open `examples/head_models/51_manual_5pt_anonymization.ipynb`. The notebook:
 
 ```
 src/cedalion/geometry/photogrammetry/anonymization/
-├── __init__.py        public API — re-exports all functions listed below
-├── pipeline.py        anonymize_scan (canonical entry point)
+├── __init__.py        public API, re-exports all functions listed below
+├── pipeline.py        anonymize_scan (entry point)
 ├── preprocessing.py   normalize_axes, isolate_head, align_axes_from_landmarks,
 │                      revert_to_einstar_frame
 ├── mask.py            detect_cap_boundary, face_mask_from_landmarks,
@@ -54,14 +54,14 @@ tests/
 
 Pipeline steps inside `anonymize_scan`:
 
-1. `normalize_axes` — rotate so +Y points anterior (handles arbitrary Einstar orientation)
-2. `isolate_head` — remove body, shoulders, and disconnected fragments
-3. `align_axes_from_landmarks` — map to CTF frame (+X anterior, +Y left, +Z up)
-4. `detect_cap_boundary` — locate the front cap-edge height along Z
-5. `face_mask_from_landmarks` — face region union ear spheres, clamped below the cap
-6. Landmark preservation — 8 mm spheres around each landmark + midline nasion strip
-7. `delete_masked_vertices` — drop triangles touching any masked vertex, UVs in sync
-8. `revert_to_einstar_frame` — return to `crs="digitized"` for saving
+1. `normalize_axes`: rotate so +Y points anterior (handles arbitrary Einstar orientation)
+2. `isolate_head`: remove body, shoulders, and disconnected fragments
+3. `align_axes_from_landmarks`: map to CTF frame (+X anterior, +Y left, +Z up)
+4. `detect_cap_boundary`: locate the front cap-edge height along Z
+5. `face_mask_from_landmarks`: face region union ear spheres, clamped below the cap
+6. Landmark preservation: 8 mm spheres around each landmark + midline nasion strip
+7. `delete_masked_vertices`: drop triangles touching any masked vertex, UVs in sync
+8. `revert_to_einstar_frame`: return to `crs="digitized"` for saving
 
 ## Tests
 
@@ -69,17 +69,17 @@ Pipeline steps inside `anonymize_scan`:
 pytest tests/test_anonymization.py -v
 ```
 
-26 tests covering all eight public functions and the end-to-end pipeline. No real scan data is required: all tests build synthetic geometry using `trimesh.creation.icosphere`, which is the same approach used throughout the cedalion test suite (see `test_geodesics.py`, `test_dataclasses_geometry.py`). Three pytest fixtures are shared across tests:
+26 tests covering all eight public functions and the end-to-end pipeline. No real scan data needed: all tests build synthetic geometry with `trimesh.creation.icosphere`, the same approach used elsewhere in cedalion (see `test_geodesics.py`, `test_dataclasses_geometry.py`). Three fixtures are shared:
 
-- `simple_sphere_surface` — unit icosphere as a minimal `TrimeshSurface` for geometry-only checks
-- `head_like_surface` — slightly elongated icosphere (X scaled ×1.2) that mimics head proportions and produces a non-trivial face region after masking
-- `axis_normalized_landmarks` — five `LabeledPoints` (Nz, Iz, Cz, LPA, RPA) placed on the sphere axes, matching the post-`normalize_axes` coordinate frame
+- `simple_sphere_surface`: unit icosphere for geometry-only checks
+- `head_like_surface`: elongated icosphere (X scaled x1.2), giving the masking step a real face region to remove
+- `axis_normalized_landmarks`: five `LabeledPoints` (Nz, Iz, Cz, LPA, RPA) on the sphere axes in the post-`normalize_axes` frame
 
 ## Branch layout
 
 | Branch | Contents |
 |--------|---------|
-| `feature/face-anonymization` | **This branch** — thesis implementation (anonymization module, notebook 51, test suite) |
+| `feature/face-anonymization` | **This branch**: thesis implementation (anonymization module, notebook 51, test suite) |
 | `main` | Upstream cedalion base |
 | `validation/face-anonymization` | Validation notebooks 64-73, batch CSV producers |
 | `auxiliary/mediapipe-nasion` | Experimental automatic nasion detection (MediaPipe) |
