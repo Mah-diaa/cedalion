@@ -15,19 +15,17 @@ Example:
     >>> surface_anon, landmarks_anon = anonymize_scan(surface, landmarks)
     >>> save_anonymized_scan(surface_anon, "out.obj", landmarks=landmarks_anon)
 
-The pipeline ``anonymize_scan`` runs internally is:
+Pipeline steps inside ``anonymize_scan``:
 
-1. :func:`normalize_axes` — rotate around X so Y points anterior.
-2. :func:`isolate_head` — strip body, shoulders, and disconnected
-   fragments.
-3. :func:`align_axes_from_landmarks` — map into the CTF frame.
-4. :func:`detect_cap_boundary` — find the cap front edge along Z.
-5. :func:`face_mask_from_landmarks` — face region + ear spheres, clamped
+1. :func:`normalize_axes`: rotate around X so Y points anterior.
+2. :func:`isolate_head`: strip body, shoulders, and disconnected fragments.
+3. :func:`align_axes_from_landmarks`: map into the CTF frame.
+4. :func:`detect_cap_boundary`: find the cap front edge along Z.
+5. :func:`face_mask_from_landmarks`: face region + ear spheres, clamped
    below the cap.
 6. Preserve small spheres around each landmark and a midline nasion strip.
-7. :func:`delete_masked_vertices` — drop triangles touching any masked
-   vertex.
-8. :func:`revert_to_einstar_frame` — return to ``crs="digitized"`` so the
+7. :func:`delete_masked_vertices`: drop triangles touching any masked vertex.
+8. :func:`revert_to_einstar_frame`: return to ``crs="digitized"`` so the
    output matches :func:`cedalion.io.read_einstar_obj`.
 
 Each of those functions is also exported so callers that need to inspect

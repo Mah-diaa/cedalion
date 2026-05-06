@@ -1,10 +1,9 @@
 """Top-level orchestrator: ``anonymize_scan``.
 
-Single entry point that wires together the granular helpers from
-``preprocessing`` and ``mask``. The granular functions remain public so
-downstream code can inspect intermediate state (e.g. the cap-detection
-profile, the head isolation mask), but the canonical pipeline lives here
-and only here.
+Single entry point that chains the helper functions from ``preprocessing``
+and ``mask``. The individual functions remain public so downstream code can
+inspect intermediate state (e.g. the cap-detection profile, the head
+isolation mask), but the canonical pipeline lives here and only here.
 """
 
 from typing import Literal

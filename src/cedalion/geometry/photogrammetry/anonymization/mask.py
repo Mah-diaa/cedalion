@@ -3,11 +3,11 @@
 Given the 5 CTF-aligned landmarks, builds a boolean deletion mask and
 applies it to the mesh:
 
-- ``detect_cap_boundary`` finds the Z height where the EEG cap front edge
+- ``detect_cap_boundary``: finds the Z height where the EEG cap front edge
   sits so the mask can be clamped below it.
-- ``face_mask_from_landmarks`` unions a forward face region with two ear
+- ``face_mask_from_landmarks``: unions a forward face region with two ear
   spheres, clamped below the cap.
-- ``delete_masked_vertices`` drops triangles touching any masked vertex.
+- ``delete_masked_vertices``: drops triangles touching any masked vertex.
 
 All mask math assumes the CTF frame: +X=anterior, +Y=left, +Z=up, origin
 at the LPA-RPA midpoint (see ``align_axes_from_landmarks``).
@@ -25,8 +25,7 @@ import cedalion.dataclasses as cdc
 import cedalion.typing as cdt
 from cedalion.io import export_to_tsv
 
-from ._utils import _ear_midpoint, _reindex_faces, _resolve_texture_image
-from .preprocessing import _rebuild_mesh
+from ._utils import _ear_midpoint, _rebuild_mesh, _reindex_faces, _resolve_texture_image
 
 logger = logging.getLogger("cedalion")
 
