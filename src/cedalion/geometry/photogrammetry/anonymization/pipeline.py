@@ -50,17 +50,17 @@ def anonymize_scan(
 
     Steps (each is also exposed as a standalone function for inspection):
 
-    1. ``normalize_axes`` — rotate around X so Y points anterior.
-    2. ``isolate_head`` — strip body, shoulders, fragments.
-    3. ``align_axes_from_landmarks`` — map into the CTF frame.
-    4. ``detect_cap_boundary`` — find the cap front edge along Z.
-    5. ``face_mask_from_landmarks`` — union face region + ear spheres,
+    1. ``normalize_axes``: rotate around X so Y points anterior.
+    2. ``isolate_head``: strip body, shoulders, fragments.
+    3. ``align_axes_from_landmarks``: map into the CTF frame.
+    4. ``detect_cap_boundary``: find the cap front edge along Z.
+    5. ``face_mask_from_landmarks``: union face region + ear spheres,
        clamped below the cap.
     6. Preserve ``landmark_keep_radius_mm``-spheres around each landmark
        and a midline nasion strip from Nz to the cap.
-    7. ``delete_masked_vertices`` — drop triangles touching any masked
+    7. ``delete_masked_vertices``: drop triangles touching any masked
        vertex, keeping UVs in sync.
-    8. (default) ``revert_to_einstar_frame`` — return to ``crs="digitized"``
+    8. (default) ``revert_to_einstar_frame``: return to ``crs="digitized"``
        so the output matches ``read_einstar_obj``'s convention and can be
        fed to ``save_anonymized_scan`` and downstream co-registration.
 

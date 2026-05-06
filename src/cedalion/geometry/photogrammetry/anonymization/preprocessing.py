@@ -25,7 +25,6 @@ from ._utils import (
     _ear_midpoint,
     _rebuild_mesh,
     _reindex_faces,
-    _resolve_texture_image,
     _transform_labeled_points,
     _upper_head_centroid,
 )
