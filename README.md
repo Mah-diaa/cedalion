@@ -32,12 +32,24 @@ Open `examples/head_models/51_manual_5pt_anonymization.ipynb`. The notebook:
 ## Module structure
 
 ```
-pipeline.py       anonymize_scan — canonical entry point
-preprocessing.py  normalize_axes, isolate_head, align_axes_from_landmarks,
-                  revert_to_einstar_frame
-mask.py           detect_cap_boundary, face_mask_from_landmarks,
-                  delete_masked_vertices, save_anonymized_scan
-_utils.py         private helpers shared by all of the above
+src/cedalion/geometry/photogrammetry/anonymization/
+├── __init__.py        public API — re-exports all functions listed below
+├── pipeline.py        anonymize_scan (canonical entry point)
+├── preprocessing.py   normalize_axes, isolate_head, align_axes_from_landmarks,
+│                      revert_to_einstar_frame
+├── mask.py            detect_cap_boundary, face_mask_from_landmarks,
+│                      delete_masked_vertices, save_anonymized_scan
+└── _utils.py          private helpers shared by preprocessing and mask
+                       (_rebuild_mesh, _copy_visual, _reindex_faces,
+                        _apply_affine, _transform_labeled_points,
+                        _ear_midpoint, _upper_head_centroid,
+                        _resolve_texture_image)
+
+examples/head_models/
+└── 51_manual_5pt_anonymization.ipynb   interactive workflow notebook
+
+tests/
+└── test_anonymization.py               26 unit tests
 ```
 
 Pipeline steps inside `anonymize_scan`:
@@ -57,7 +69,11 @@ Pipeline steps inside `anonymize_scan`:
 pytest tests/test_anonymization.py -v
 ```
 
-22 tests covering all eight public functions and the end-to-end pipeline. No external data required (synthetic trimesh spheres only).
+26 tests covering all eight public functions and the end-to-end pipeline. No real scan data is required: all tests build synthetic geometry using `trimesh.creation.icosphere`, which is the same approach used throughout the cedalion test suite (see `test_geodesics.py`, `test_dataclasses_geometry.py`). Three pytest fixtures are shared across tests:
+
+- `simple_sphere_surface` — unit icosphere as a minimal `TrimeshSurface` for geometry-only checks
+- `head_like_surface` — slightly elongated icosphere (X scaled ×1.2) that mimics head proportions and produces a non-trivial face region after masking
+- `axis_normalized_landmarks` — five `LabeledPoints` (Nz, Iz, Cz, LPA, RPA) placed on the sphere axes, matching the post-`normalize_axes` coordinate frame
 
 ## Branch layout
 
