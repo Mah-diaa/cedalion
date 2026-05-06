@@ -12,6 +12,7 @@ import cedalion.dataclasses as cdc
 
 from cedalion.geometry.photogrammetry.anonymization import (
     align_axes_from_landmarks,
+    anonymize_scan,
     delete_masked_vertices,
     detect_cap_boundary,
     face_mask_from_landmarks,
@@ -291,6 +292,39 @@ def test_save_writes_landmark_tsv(
         strip_texture=True,
     )
     assert any(p.endswith("_landmarks.tsv") for p in written)
+
+
+# anonymize_scan (orchestrator) ---------------------------------------------
+
+
+def test_anonymize_scan_reduces_vertices(head_like_surface, axis_normalized_landmarks):
+    surface_anon, _ = anonymize_scan(head_like_surface, axis_normalized_landmarks)
+    assert surface_anon.nvertices < head_like_surface.nvertices
+
+
+def test_anonymize_scan_returns_digitized_frame(
+    head_like_surface, axis_normalized_landmarks
+):
+    surface_anon, landmarks_anon = anonymize_scan(
+        head_like_surface, axis_normalized_landmarks
+    )
+    assert surface_anon.crs == "digitized"
+    assert "digitized" in landmarks_anon.dims
+
+
+def test_anonymize_scan_return_frame_ctf(head_like_surface, axis_normalized_landmarks):
+    surface_anon, landmarks_anon = anonymize_scan(
+        head_like_surface, axis_normalized_landmarks, return_frame="ctf"
+    )
+    assert surface_anon.crs == "ctf"
+
+
+def test_anonymize_scan_raises_on_missing_landmark(
+    head_like_surface, axis_normalized_landmarks
+):
+    partial = axis_normalized_landmarks.isel(label=slice(0, 3))
+    with pytest.raises(ValueError, match="Missing landmarks"):
+        anonymize_scan(head_like_surface, partial)
 
 
 # end-to-end pipeline -------------------------------------------------------
