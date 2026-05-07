@@ -27,7 +27,7 @@ Open `examples/head_models/51_manual_5pt_anonymization.ipynb`. The notebook:
 2. Picks the five 10-20 landmarks interactively (Nz, Iz, Cz, LPA, RPA)
 3. Calls `anonymize_scan(surface, landmarks)`
 4. Shows a before/after comparison
-5. Saves the anonymized OBJ + `_landmarks.tsv` sidecar via `save_anonymized_scan`
+5. Saves the anonymized OBJ + sanitized JPG texture bundle via `save_anonymized_scan`
 
 ## Module structure
 
@@ -81,8 +81,23 @@ pytest tests/test_anonymization.py -v
 |--------|---------|
 | `feature/face-anonymization` | **This branch**: thesis implementation (anonymization module, notebook 51, test suite) |
 | `main` | Upstream cedalion base |
-| `validation/face-anonymization` | Validation notebooks 64-73, batch CSV producers |
+| `validation/face-anonymization` | Measurement notebooks behind the thesis results tables (see below) |
 | `auxiliary/mediapipe-nasion` | Experimental automatic nasion detection (MediaPipe) |
+
+### Validation branch contents
+
+The notebooks on `validation/face-anonymization` are the measurement harness behind the thesis results tables. They consume the shipped pipeline's output and quantify it; they are not part of the pipeline itself.
+
+| Notebook | What it checks | Headline result on the 11-subject cohort |
+|---|---|---|
+| `64_batch_validation` | Driver that runs the four validators below on every subject and emits per-subject CSVs | per-subject CSVs feeding the thesis tables |
+| `66_preservation_check` | 10-20 landmark deviation + bit-exact vertex preservation across the surviving surface | 0.000 mm across all 55 landmark measurements (5 landmarks x 11 subjects) |
+| `68_coreg_invariance` | Cedalion `ColoredStickerProcessor` re-run on original vs anonymized mesh (optode-cap subcohort) | 131 matched stickers, 0 mm deviation in sticker centres and scalp-projected optode positions |
+| `70_auxiliary_nasion` | MediaPipe Face Landmarker auto-nasion vs the manually picked nasion | 13.68 mm cohort mean offset, 30.78 mm worst case |
+| `72_face_detectability_comparison` | MediaPipe Face Detector hit counts under a 21-view sweep: original vs vertex-deletion vs noise-perturbation | 93/231 -> 34/231 (63% reduction); optode-cap subcohort 32/147 -> 4/147 (88%); noise reaches 28/231 (Wilcoxon p=0.375, not distinguishable from deletion) |
+| `73_s8_mediapipe_boxes` | BlazeFace bounding box and six-keypoint inspection on a single subject | qualitative figure for the discussion of why post-deletion residual hits are silhouette artefacts |
+
+Helper modules `_thesis_data.py`, `_thesis_pipeline.py`, `_validator_noise.py`, and `_validator_render.py` factor the cohort-walk, pipeline call, noise-perturbation operator, and contact-sheet rendering used by these notebooks.
 
 ---
 
