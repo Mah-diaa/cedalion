@@ -1,6 +1,6 @@
 # Face Anonymization for Photogrammetry Scans
 
-**Thesis (M.Sc., TU Berlin / IBS Lab):** "Development of a Landmark-Aware Face-Removal Algorithm for Photogrammetric Head Scans for Data Protection"
+M.Sc. thesis at TU Berlin / IBS Lab: "Development of a Landmark-Aware Face-Removal Algorithm for Photogrammetric Head Scans for Data Protection".
 
 This is a fork of [cedalion](https://github.com/ibs-lab/cedalion) with a geometric face anonymization module for Einstar photogrammetry scans used in fNIRS research. The module lives at:
 
@@ -86,19 +86,19 @@ pytest tests/test_anonymization.py -v
 
 ### Validation branch contents
 
-The notebooks on `validation/face-anonymization` are the measurement harness behind the thesis results tables. They consume the shipped pipeline's output and quantify it; they are not part of the pipeline itself.
+The notebooks on `validation/face-anonymization` produce the per-subject numbers in the thesis results tables. They run on top of the shipped pipeline's output and do not modify it.
 
 | Notebook | What it checks | Headline result on the 11-subject cohort |
 |---|---|---|
 | `64_batch_validation` | Driver that runs the four validators below on every subject and emits per-subject CSVs | per-subject CSVs feeding the thesis tables |
 | `66_preservation_check` | 10-20 landmark deviation + bit-exact vertex preservation across the surviving surface | 0.000 mm across all 55 landmark measurements (5 landmarks x 11 subjects) |
 | `68_coreg_invariance` | Cedalion `ColoredStickerProcessor` re-run on original vs anonymized mesh (optode-cap subcohort) | 131 matched stickers, 0 mm deviation in sticker centres and scalp-projected optode positions |
-| `69_coreg_visual_check` | Side-by-side render of detected stickers on original vs anonymized mesh; flags any original detection without an anon counterpart in red so the operator can verify by eye | qualitative; supports the operator-verification step backing notebook 68 |
+| `69_coreg_visual_check` | Side-by-side render of detected stickers on the original and anonymized mesh; any original-side detection without a match on the anonymized side is drawn in red so the operator can spot it | qualitative; the manual visibility check that backs notebook 68 |
 | `70_auxiliary_nasion` | MediaPipe Face Landmarker auto-nasion vs the manually picked nasion | 13.68 mm cohort mean offset, 30.78 mm worst case |
 | `72_face_detectability_comparison` | MediaPipe Face Detector hit counts under a 21-view sweep: original vs vertex-deletion vs noise-perturbation | 93/231 -> 34/231 (63% reduction); optode-cap subcohort 32/147 -> 4/147 (88%); noise reaches 28/231 (Wilcoxon p=0.375, not distinguishable from deletion) |
 | `73_s8_mediapipe_boxes` | BlazeFace bounding box and six-keypoint inspection on a single subject | qualitative figure for the discussion of why post-deletion residual hits are silhouette artefacts |
 
-Helper modules `_thesis_data.py`, `_thesis_pipeline.py`, `_validator_noise.py`, and `_validator_render.py` factor the cohort-walk, pipeline call, noise-perturbation operator, and contact-sheet rendering used by these notebooks.
+Helper modules `_thesis_data.py`, `_thesis_pipeline.py`, `_validator_noise.py`, and `_validator_render.py` hold the cohort walk, pipeline call, noise-perturbation operator, and contact-sheet rendering shared across these notebooks.
 
 ---
 
