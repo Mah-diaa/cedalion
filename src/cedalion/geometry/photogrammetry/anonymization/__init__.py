@@ -13,7 +13,7 @@ Example:
     ...     anonymize_scan, save_anonymized_scan,
     ... )
     >>> surface_anon, landmarks_anon = anonymize_scan(surface, landmarks)
-    >>> save_anonymized_scan(surface_anon, "out.obj", landmarks=landmarks_anon)
+    >>> save_anonymized_scan(surface_anon, "out.obj")
 
 Pipeline steps inside ``anonymize_scan``:
 

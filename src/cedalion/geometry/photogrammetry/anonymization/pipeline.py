@@ -87,9 +87,8 @@ def anonymize_scan(
 
     Returns:
         Tuple of (anonymized_surface, anonymized_landmarks). Frame is
-        controlled by ``return_frame``. Pass directly to
-        ``save_anonymized_scan(..., landmarks=...)`` when
-        ``return_frame="digitized"``.
+        controlled by ``return_frame``. The surface can be written with
+        ``save_anonymized_scan`` when ``return_frame="digitized"``.
     """
     landmarks = normalize_landmarks_labels(landmarks)
     labels = list(landmarks["label"].values)

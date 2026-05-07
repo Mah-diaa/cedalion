@@ -22,8 +22,6 @@ from PIL import Image, ImageDraw, ImageFilter
 from scipy.signal import savgol_filter
 
 import cedalion.dataclasses as cdc
-import cedalion.typing as cdt
-from cedalion.io import export_to_tsv
 
 from ._utils import _ear_midpoint, _rebuild_mesh, _reindex_faces, _resolve_texture_image
 
@@ -279,7 +277,6 @@ _MTL_TEMPLATE = (
 def save_anonymized_scan(
     surface: cdc.TrimeshSurface,
     out_path: str,
-    landmarks: cdt.LabeledPoints | None = None,
     strip_texture: bool = False,
 ) -> list[str]:
     """Export an anonymized photogrammetry surface to disk.
@@ -294,21 +291,15 @@ def save_anonymized_scan(
     fallback applies when the input mesh has no usable texture, with a
     warning.
 
-    When ``landmarks`` is provided, also writes ``{stem}_landmarks.tsv`` via
-    ``cedalion.io.export_to_tsv`` for downstream co-registration.
-
     Args:
         surface: Anonymized TrimeshSurface (typically output of
             ``delete_masked_vertices``).
         out_path: Destination path ending in ``.obj``.
-        landmarks: LabeledPoints (Nz, Iz, LPA, RPA, Cz) in the same frame
-            as ``surface``, persisted alongside the mesh as a TSV.
         strip_texture: If True, skip the MTL + JPG and write geometry only.
 
     Returns:
         List of absolute paths written (``.obj`` plus ``.mtl`` + ``.jpg``
-        when a texture was written, plus ``_landmarks.tsv`` when landmarks
-        were given).
+        when a texture was written).
 
     Raises:
         ValueError: If ``out_path`` does not end in ``.obj``.
@@ -365,16 +356,6 @@ def save_anonymized_scan(
             )
         mesh_to_write.export(out_path)
         written.append(out_path)
-
-    if landmarks is not None:
-        tsv_path = os.path.join(out_dir, f"{stem}_landmarks.tsv")
-        export_to_tsv(tsv_path, landmarks)
-        written.append(tsv_path)
-    else:
-        logger.warning(
-            "save_anonymized_scan called without landmarks; "
-            "downstream co-registration will need them saved separately."
-        )
 
     logger.info(
         f"Saved anonymized scan: "

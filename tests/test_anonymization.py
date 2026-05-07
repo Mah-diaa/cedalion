@@ -276,20 +276,6 @@ def test_save_geometry_only(simple_sphere_surface, tmp_path):
     assert any(p.endswith(".obj") for p in written)
 
 
-def test_save_writes_landmark_tsv(
-    simple_sphere_surface, axis_normalized_landmarks, tmp_path
-):
-    """Passing landmarks produces a _landmarks.tsv alongside the OBJ."""
-    out = str(tmp_path / "anon.obj")
-    written = save_anonymized_scan(
-        simple_sphere_surface,
-        out,
-        landmarks=axis_normalized_landmarks,
-        strip_texture=True,
-    )
-    assert any(p.endswith("_landmarks.tsv") for p in written)
-
-
 def test_anonymize_scan_reduces_vertices(head_like_surface, axis_normalized_landmarks):
     """Anonymized surface has fewer vertices than the input (face region deleted)."""
     surface_anon, _ = anonymize_scan(head_like_surface, axis_normalized_landmarks)
@@ -349,16 +335,13 @@ def test_full_anonymization_pipeline(
     cap_z, *_ = detect_cap_boundary(verts, Nz, Cz, Lpa, Rpa)
     mask, _ = face_mask_from_landmarks(verts, Nz, Lpa, Rpa, cap_z=cap_z)
     surface_anon = delete_masked_vertices(surface_h, mask)
-    surface_anon_dig, landmarks_dig = revert_to_einstar_frame(
+    surface_anon_dig, _ = revert_to_einstar_frame(
         surface_anon, landmarks_n, R, M_ctf
     )
 
     out = str(tmp_path / "anon.obj")
-    written = save_anonymized_scan(
-        surface_anon_dig, out, landmarks=landmarks_dig, strip_texture=True
-    )
+    save_anonymized_scan(surface_anon_dig, out, strip_texture=True)
 
     assert surface_anon.nvertices < surface_h.nvertices
     assert surface_anon_dig.crs == "digitized"
     assert os.path.exists(out)
-    assert any(p.endswith("_landmarks.tsv") for p in written)
