@@ -1,10 +1,9 @@
 """Top-level orchestrator: ``anonymize_scan``.
 
-Single entry point that wires together the granular helpers from
-``preprocessing`` and ``mask``. The granular functions remain public so
-downstream code can inspect intermediate state (e.g. the cap-detection
-profile, the head isolation mask), but the canonical pipeline lives here
-and only here.
+Single entry point that chains the helper functions from ``preprocessing``
+and ``mask``. The individual functions remain public so downstream code can
+inspect intermediate state (e.g. the cap-detection profile, the head
+isolation mask), but the canonical pipeline lives here and only here.
 """
 
 from typing import Literal
@@ -51,17 +50,17 @@ def anonymize_scan(
 
     Steps (each is also exposed as a standalone function for inspection):
 
-    1. ``normalize_axes`` — rotate around X so Y points anterior.
-    2. ``isolate_head`` — strip body, shoulders, fragments.
-    3. ``align_axes_from_landmarks`` — map into the CTF frame.
-    4. ``detect_cap_boundary`` — find the cap front edge along Z.
-    5. ``face_mask_from_landmarks`` — union face region + ear spheres,
+    1. ``normalize_axes``: rotate around X so Y points anterior.
+    2. ``isolate_head``: strip body, shoulders, fragments.
+    3. ``align_axes_from_landmarks``: map into the CTF frame.
+    4. ``detect_cap_boundary``: find the cap front edge along Z.
+    5. ``face_mask_from_landmarks``: union face region + ear spheres,
        clamped below the cap.
     6. Preserve ``landmark_keep_radius_mm``-spheres around each landmark
        and a midline nasion strip from Nz to the cap.
-    7. ``delete_masked_vertices`` — drop triangles touching any masked
+    7. ``delete_masked_vertices``: drop triangles touching any masked
        vertex, keeping UVs in sync.
-    8. (default) ``revert_to_einstar_frame`` — return to ``crs="digitized"``
+    8. (default) ``revert_to_einstar_frame``: return to ``crs="digitized"``
        so the output matches ``read_einstar_obj``'s convention and can be
        fed to ``save_anonymized_scan`` and downstream co-registration.
 
@@ -88,9 +87,8 @@ def anonymize_scan(
 
     Returns:
         Tuple of (anonymized_surface, anonymized_landmarks). Frame is
-        controlled by ``return_frame``. Pass directly to
-        ``save_anonymized_scan(..., landmarks=...)`` when
-        ``return_frame="digitized"``.
+        controlled by ``return_frame``. The surface can be written with
+        ``save_anonymized_scan`` when ``return_frame="digitized"``.
     """
     landmarks = normalize_landmarks_labels(landmarks)
     labels = list(landmarks["label"].values)

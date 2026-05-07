@@ -1,6 +1,6 @@
 """Preprocessing: axis normalization and head isolation.
 
-Gets a raw Einstar photogrammetry scan into a canonical frame suitable for
+Gets a raw Einstar photogrammetry scan into a standard reference frame suitable for
 landmark detection and mask building:
 
 - ``normalize_axes`` rotates around X so Y points anterior (preliminary,
@@ -23,70 +23,13 @@ from cedalion.geometry.landmarks import normalize_landmarks_labels
 from ._utils import (
     _apply_affine,
     _ear_midpoint,
+    _rebuild_mesh,
     _reindex_faces,
-    _resolve_texture_image,
     _transform_labeled_points,
     _upper_head_centroid,
 )
 
 logger = logging.getLogger("cedalion")
-
-
-def _copy_visual(src_mesh, dst_mesh, vertex_index=None) -> None:
-    """Copy a trimesh ``visual`` onto ``dst_mesh``, optionally reindexing.
-
-    Passing ``visual=old.visual`` to a new ``Trimesh(...)`` silently downgrades
-    a ``TextureVisuals`` to ``ColorVisuals`` because the visual still
-    back-references the source mesh's vertex count. Rebuilding explicitly
-    avoids that.
-
-    Args:
-        src_mesh: Source trimesh.
-        dst_mesh: Destination trimesh (mutated in place).
-        vertex_index: Indices into the source vertex array. If given, UVs /
-            vertex_colors are sliced by this index. Leave None when the
-            vertex count is unchanged.
-    """
-    src_visual = src_mesh.visual
-    uv = getattr(src_visual, "uv", None)
-    n_src = len(src_mesh.vertices)
-
-    if uv is not None and len(uv) == n_src:
-        uv_arr = np.asarray(uv)
-        if vertex_index is not None:
-            uv_arr = uv_arr[vertex_index]
-        image = _resolve_texture_image(src_visual)
-        material = getattr(src_visual, "material", None)
-        dst_mesh.visual = trimesh.visual.TextureVisuals(
-            uv=uv_arr,
-            image=image,
-            material=material,
-        )
-        return
-
-    vcol = getattr(src_visual, "vertex_colors", None)
-    if vcol is not None and len(vcol) == n_src:
-        vcol_arr = np.asarray(vcol)
-        if vertex_index is not None:
-            vcol_arr = vcol_arr[vertex_index]
-        dst_mesh.visual.vertex_colors = vcol_arr
-
-
-def _rebuild_mesh(
-    src_mesh: trimesh.Trimesh,
-    *,
-    vertices: np.ndarray,
-    faces: np.ndarray,
-    vertex_index: np.ndarray | None = None,
-) -> trimesh.Trimesh:
-    """Build a new ``Trimesh`` and re-attach the source visual.
-
-    Centralizes the ``Trimesh(... process=False)`` + ``_copy_visual`` duo
-    used by every transform in the pipeline.
-    """
-    new_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-    _copy_visual(src_mesh, new_mesh, vertex_index=vertex_index)
-    return new_mesh
 
 
 @cdc.validate_schemas
