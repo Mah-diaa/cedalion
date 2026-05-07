@@ -92,7 +92,8 @@ The notebooks on `validation/face-anonymization` are the measurement harness beh
 |---|---|---|
 | `64_batch_validation` | Driver that runs the four validators below on every subject and emits per-subject CSVs | per-subject CSVs feeding the thesis tables |
 | `66_preservation_check` | 10-20 landmark deviation + bit-exact vertex preservation across the surviving surface | 0.000 mm across all 55 landmark measurements (5 landmarks x 11 subjects) |
-| `68_coreg_invariance` | Cedalion `ColoredStickerProcessor` re-run on original vs anonymized mesh (optode-cap subcohort) | 131 matched stickers, 0 mm deviation in sticker centres and scalp-projected optode positions |
+| `68_coreg_invariance` | Cedalion `ColoredStickerProcessor` re-run on original vs anonymized mesh (optode-cap subcohort): per-subject sticker counts | equal counts on every subject after operator visibility verification (754 patches across the cohort) |
+| `69_coreg_visual_check` | Side-by-side render of detected stickers on original vs anonymized mesh; flags any original detection without an anon counterpart in red so the operator can verify by eye | qualitative; supports the operator-verification step backing notebook 68 |
 | `70_auxiliary_nasion` | MediaPipe Face Landmarker auto-nasion vs the manually picked nasion | 13.68 mm cohort mean offset, 30.78 mm worst case |
 | `72_face_detectability_comparison` | MediaPipe Face Detector hit counts under a 21-view sweep: original vs vertex-deletion vs noise-perturbation | 93/231 -> 34/231 (63% reduction); optode-cap subcohort 32/147 -> 4/147 (88%); noise reaches 28/231 (Wilcoxon p=0.375, not distinguishable from deletion) |
 | `73_s8_mediapipe_boxes` | BlazeFace bounding box and six-keypoint inspection on a single subject | qualitative figure for the discussion of why post-deletion residual hits are silhouette artefacts |
